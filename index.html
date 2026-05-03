@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ProStructure | Protein Intelligence Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- PDBe Molstar – same viewer as UniProt -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pdbe-molstar@latest/build/pdbe-molstar.css">
+    <script src="https://cdn.jsdelivr.net/npm/pdbe-molstar@latest/build/pdbe-molstar-plugin.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Outfit:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="glass-background"></div>
+    
+    <header>
+        <div class="logo">ProStructure<span>.io</span></div>
+        <div class="search-container">
+            <input type="text" id="proteinInput" placeholder="Enter UniProt ID, Protein Name, or Sequence..." autofocus>
+            <button id="searchBtn">Analyze</button>
+        </div>
+    </header>
+
+    <main id="app">
+        <section id="hero-section" class="visible">
+            <h1>Unlock Molecular Mysteries</h1>
+            <p>Paste a sequence or identifier to explore structural and functional insights.</p>
+        </section>
+
+        <section id="results-section" class="hidden">
+            <div class="grid-container">
+                <!-- Left: 3D Viewer -->
+                <div class="card viewer-card">
+                    <div class="card-header">
+                        <h3 id="proteinTitle">Protein Structure</h3>
+                        <div class="controls">
+                            <span class="badge" id="structureSource">Solved PDB</span>
+                        </div>
+                    </div>
+
+                    <!-- Color scheme selector -->
+                    <div class="viewer-toolbar">
+                        <label for="colorScheme" class="toolbar-label">Color by:</label>
+                        <select id="colorScheme" class="color-select">
+                            <option value="default">Default</option>
+                            <option value="plddt">pLDDT (AlphaFold confidence)</option>
+                            <option value="chain">Chain</option>
+                            <option value="element">Element</option>
+                            <option value="secondary-structure">Secondary Structure</option>
+                            <option value="sequence">Sequence Position</option>
+                        </select>
+                        <span id="plddt-only-note" class="toolbar-note hidden">⚠ pLDDT only applies to AlphaFold models</span>
+                    </div>
+
+                    <!-- Molstar JS plugin container -->
+                    <div id="molstar-viewer" style="width:100%;height:560px;position:relative;"></div>
+
+                    <!-- pLDDT legend -->
+                    <div id="plddt-legend" class="hidden">
+                        <div class="legend-item"><span class="color plddt-veryhigh"></span> &gt;90 Very high</div>
+                        <div class="legend-item"><span class="color plddt-high"></span> 70–90 Confident</div>
+                        <div class="legend-item"><span class="color plddt-low"></span> 50–70 Low</div>
+                        <div class="legend-item"><span class="color plddt-verylow"></span> &lt;50 Very low</div>
+                    </div>
+                </div>
+
+                <!-- Right Top: Basic Info -->
+                <div class="card info-card">
+                    <h3>General Metadata</h3>
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <label>Gene</label>
+                            <span id="geneName">-</span>
+                        </div>
+                        <div class="info-item">
+                            <label>Organism</label>
+                            <span id="organismName">-</span>
+                        </div>
+                        <div class="info-item">
+                            <label>Sequence Length</label>
+                            <span id="seqLength">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Middle: PTMs & Cofactors -->
+                <div class="card ptm-card">
+                    <h3>Functional Features</h3>
+                    <div id="featureList" class="feature-tags">
+                        <!-- PTMs will be injected here -->
+                    </div>
+                </div>
+
+                <!-- Right Bottom: Binders & Isoforms -->
+                <div class="card interactive-card">
+                    <div class="tab-header">
+                        <button class="tab-btn active" data-tab="ligands">Ligands</button>
+                        <button class="tab-btn" data-tab="cofactors">Cofactors</button>
+                        <button class="tab-btn" data-tab="variants">Variants</button>
+                        <button class="tab-btn" data-tab="isoforms">Isoforms</button>
+                        <button class="tab-btn" data-tab="solved">Structures</button>
+                        <button class="tab-btn" data-tab="pockets">Pockets</button>
+                        <button class="tab-btn" data-tab="simulations">Simulations</button>
+                    </div>
+                    <div id="tabContent" class="tab-content">
+                        <!-- Content injected here -->
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="sequence-results" class="hidden">
+            <div class="card">
+                <h3>Sequence Identity Matches</h3>
+                <div id="matchTable" class="table-container"></div>
+            </div>
+            <div class="card">
+                <h3>Solve on Boltz-2</h3>
+                <div class="status-box development">Under Development</div>
+            </div>
+            <div class="card">
+                <h3>Foldseek Similarity Results</h3>
+                <div id="foldseekTable" class="table-container"></div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        &copy; 2026 ProStructure AI. Powered by UniProt, RCSB PDB & AlphaFold.
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>
