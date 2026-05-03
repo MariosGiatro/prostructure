@@ -7,7 +7,7 @@ import numpy as np
 from scipy.ndimage import distance_transform_edt, gaussian_filter, maximum_filter
 from collections import deque
 
-PORT = 8000
+PORT = int(os.environ.get("PORT", "8000"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Pure-Python geometric cavity detection  (numpy + scipy only)
