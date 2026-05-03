@@ -1,0 +1,178 @@
+@import "tailwindcss";
+
+:root {
+  --background: #050508;
+  --foreground: #fafafa;
+
+  --surface-0: #050508;
+  --surface-1: #0a0a0f;
+  --surface-2: #101017;
+  --surface-3: #16161e;
+  --hairline: rgba(255, 255, 255, 0.07);
+  --hairline-strong: rgba(255, 255, 255, 0.12);
+
+  --accent: #67e8f9;
+  --accent-soft: rgba(103, 232, 249, 0.14);
+  --accent-ring: rgba(103, 232, 249, 0.35);
+
+  --text-muted: #71717a;
+  --text-secondary: #a1a1aa;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+  --shadow-deep: 0 24px 80px -20px rgba(0, 0, 0, 0.65);
+  --shadow-soft: 0 8px 32px -12px rgba(0, 0, 0, 0.5);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ── Hero atmosphere ─────────────────────────────────────────────── */
+
+.mesh-hero {
+  background-color: #050508;
+  background-image:
+    radial-gradient(ellipse 90% 70% at 50% -20%, rgba(120, 80, 200, 0.45), transparent 55%),
+    radial-gradient(ellipse 60% 50% at 100% 30%, rgba(59, 130, 246, 0.22), transparent 50%),
+    radial-gradient(ellipse 55% 45% at 0% 40%, rgba(56, 189, 248, 0.25), transparent 50%),
+    radial-gradient(ellipse 80% 60% at 50% 120%, rgba(14, 165, 233, 0.30), transparent 55%),
+    radial-gradient(ellipse 50% 40% at 85% 85%, rgba(99, 102, 241, 0.2), transparent 50%);
+}
+
+/* ── Background utilities ────────────────────────────────────────── */
+
+.bg-grid {
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 56px 56px;
+  background-position: -1px -1px;
+}
+
+.bg-grid-fade {
+  -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 40%, #000 40%, transparent 80%);
+          mask-image: radial-gradient(ellipse 70% 60% at 50% 40%, #000 40%, transparent 80%);
+}
+
+.divider-fade {
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    rgba(255, 255, 255, 0.12) 20%,
+    rgba(255, 255, 255, 0.12) 80%,
+    transparent
+  );
+}
+
+.spotlight {
+  background:
+    radial-gradient(ellipse 60% 80% at 50% 0%, rgba(103, 232, 249, 0.08), transparent 60%),
+    radial-gradient(ellipse 80% 60% at 50% 100%, rgba(120, 80, 200, 0.10), transparent 60%);
+}
+
+/* ── Components ──────────────────────────────────────────────────── */
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--hairline-strong);
+  background: rgba(255, 255, 255, 0.03);
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.eyebrow::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent-ring);
+}
+
+.section-title {
+  font-size: clamp(1.75rem, 2.6vw, 2.5rem);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+  color: #fafafa;
+  text-wrap: balance;
+}
+
+.section-kicker {
+  margin-top: 0.875rem;
+  max-width: 36rem;
+  color: var(--text-secondary);
+  font-size: 1rem;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.card {
+  position: relative;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--hairline);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0)) padding-box,
+    var(--surface-1) padding-box;
+}
+
+.card-quiet {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--hairline);
+  background: var(--surface-1);
+}
+
+.mono-cap {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  font-size: 13px;
+  transition: color 150ms ease, border-color 150ms ease, background-color 150ms ease;
+}
+.chip:hover {
+  color: #fafafa;
+  border-color: var(--hairline-strong);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
