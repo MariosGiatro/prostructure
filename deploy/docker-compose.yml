@@ -1,0 +1,42 @@
+name: prostructure-stack
+
+services:
+  # Current app: Python HTTP server (static + JSON API)
+  prostructure:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "8000"
+
+  # -------------------------------------------------------------------------
+  # Template: another HTTP service (Node, Go, etc.). Uncomment and wire Caddy.
+  # -------------------------------------------------------------------------
+  # nodeapp:
+  #   image: node:22-alpine
+  #   working_dir: /srv
+  #   volumes:
+  #     - ./apps/node-demo:/srv
+  #   command: ["node", "server.js"]
+  #   restart: unless-stopped
+  #   expose:
+  #     - "3000"
+
+  gateway:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      # Enable when you have a DNS name + TLS (also set $DOMAIN in env):
+      # - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - prostructure
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,24 @@
+# Edge reverse proxy — add routes as you add Compose services.
+#
+# Examples (uncomment when you add backing services):
+#
+#   Node on path /node:
+#     handle_path /node/* {
+#         reverse_proxy nodeapp:3000
+#     }
+#
+#   Separate static bucket (e.g. nginx:alpine serving /usr/share/nginx/html):
+#     handle /marketing/* {
+#         reverse_proxy marketing:80
+#     }
+#
+# HTTPS (set DOMAIN and open 443 — see docker-compose):
+#   {$DOMAIN} {
+#     encode gzip
+#     reverse_proxy prostructure:8000
+#   }
+
+:80 {
+    encode gzip
+    reverse_proxy prostructure:8000
+}
