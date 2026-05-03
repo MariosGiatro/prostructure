@@ -64,7 +64,7 @@ def _flood_exterior(occ):
     return reach
 
 
-def find_cavities(atoms, gs=1.0, small_probe=1.4, large_probe=4.5, min_vol=50.0):
+def find_cavities(atoms, gs=1.0, small_probe=1.4, large_probe=4.5, min_vol=50.0, chain_id=None):
     """
     Two-probe pocket detection using scipy.
       - Small probe (1.4 Å) can reach surface clefts and active-site pockets.
@@ -76,6 +76,10 @@ def find_cavities(atoms, gs=1.0, small_probe=1.4, large_probe=4.5, min_vol=50.0)
     SKIP = {'HOH', 'WAT', 'H2O'}
     heavy = [a for a in atoms
              if a['name'][0] not in ('H', 'D') and a['resname'] not in SKIP]
+    
+    if chain_id:
+        heavy = [a for a in heavy if a['chain'].upper() == chain_id.upper()]
+
     if not heavy:
         return []
 
@@ -207,6 +211,69 @@ def parse_pdb_atoms(pdb_text):
     return atoms
 
 
+# ───────────────────────────────────────────────
+#  Simulation Integration
+# ───────────────────────────────────────────────
+SIM_WORKSPACE = os.path.join(os.getcwd(), 'simulations_data')
+os.makedirs(SIM_WORKSPACE, exist_ok=True)
+
+def prepare_simulation_job(pdb_id, receptor_chain, ligand_id, is_protein_ligand):
+    """
+    Prepares a directory for a GROMACS simulation.
+    - pdb_id: the structure ID
+    - receptor_chain: chain ID for receptor
+    - ligand_id: chain ID (if protein) or ligand name (if small mol)
+    - is_protein_ligand: bool, true if ligand is a protein chain
+    """
+    import shutil
+    job_id = f"sim_{pdb_id}_{receptor_chain}_{ligand_id}_{os.urandom(2).hex()}"
+    job_dir = os.path.join(SIM_WORKSPACE, job_id)
+    os.makedirs(job_dir, exist_ok=True)
+    
+    # 1. Download and trim PDB
+    try:
+        req = urllib.request.Request(f"https://files.rcsb.org/download/{pdb_id.upper()}.pdb")
+        pdb_text = urllib.request.urlopen(req).read().decode('utf-8')
+        
+        # Simple trimmer: Keep only selected chains/ligands and rename to A and B
+        lines = pdb_text.splitlines()
+        trimmed_lines = []
+        for line in lines:
+            if line.startswith(('ATOM', 'HETATM')):
+                chain = line[21].strip()
+                resname = line[17:20].strip()
+                if chain == receptor_chain:
+                    # Rename receptor to Chain A
+                    new_line = line[:21] + 'A' + line[22:]
+                    trimmed_lines.append(new_line)
+                elif is_protein_ligand and chain == ligand_id:
+                    # Rename protein ligand to Chain B
+                    new_line = line[:21] + 'B' + line[22:]
+                    trimmed_lines.append(new_line)
+                elif not is_protein_ligand and resname == ligand_id:
+                    # Rename small mol to Chain B
+                    new_line = line[:21] + 'B' + line[22:]
+                    trimmed_lines.append(new_line)
+        
+        with open(os.path.join(job_dir, f"{pdb_id}_trimmed.pdb"), 'w') as f:
+            f.write('\n'.join(trimmed_lines))
+            
+        # 2. Copy the appropriate script
+        script_name = 'gmxAutopilotGPU0_dimer.sh' if is_protein_ligand else 'gmxAutopilotGPU0_smallmol.sh'
+        src_script = os.path.join('C:\\Users\\miatr\\Desktop\\integrate', script_name)
+        if os.path.exists(src_script):
+            shutil.copy(src_script, os.path.join(job_dir, 'run_sim.sh'))
+        
+        # 3. Create placeholder for status
+        with open(os.path.join(job_dir, 'status.json'), 'w') as f:
+            json.dump({'status': 'queued', 'job_id': job_id, 'pdb_id': pdb_id}, f)
+            
+        return job_id
+    except Exception as e:
+        print(f"Simulation prep failed: {e}")
+        return None
+
+
 class ProStructureHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith('/api/uniprot/'):
@@ -244,19 +311,77 @@ class ProStructureHandler(http.server.SimpleHTTPRequestHandler):
             else:
                 self.send_response(404); self.end_headers()
         elif self.path.startswith('/api/cavity_search/'):
-            self.handle_cavity_search(self.path.split('/')[-1].lower())
+            parts = self.path.split('/')
+            pdb_id = parts[3].lower()
+            chain_id = parts[4].upper() if len(parts) > 4 else None
+            self.handle_cavity_search(pdb_id, chain_id)
+        elif self.path.startswith('/api/boltz/run'):
+            # Usage: /api/boltz/run?accession=P12345&partner_seq=...&partner_type=protein
+            from urllib.parse import urlparse, parse_qs
+            query = parse_qs(urlparse(self.path).query)
+            accession = query.get('accession', [None])[0]
+            partner = query.get('partner', [None])[0]
+            p_type = query.get('type', ['protein'])[0]
+            
+            if accession and partner:
+                job_id = self.prepare_boltz_job(accession, partner, p_type)
+                self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers()
+                self.wfile.write(json.dumps({'job_id': job_id}).encode())
+            else:
+                self.send_response(400); self.end_headers()
+        elif self.path.startswith('/api/simulations/run'):
+            # Usage: /api/simulations/run?pdb=1abc&receptor=A&ligand=B&type=protein
+            from urllib.parse import urlparse, parse_qs
+            query = parse_qs(urlparse(self.path).query)
+            pdb_id = query.get('pdb', [None])[0]
+            receptor = query.get('receptor', [None])[0]
+            ligand = query.get('ligand', [None])[0]
+            is_protein = query.get('type', ['protein'])[0] == 'protein'
+            
+            if pdb_id and receptor and ligand:
+                job_id = prepare_simulation_job(pdb_id, receptor, ligand, is_protein)
+                self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers()
+                self.wfile.write(json.dumps({'job_id': job_id}).encode())
+            else:
+                self.send_response(400); self.end_headers()
+        elif self.path.startswith('/api/docking/run'):
+            # Usage: /api/docking/run?pdb=1abc&receptor=A&ligand=XYZ
+            from urllib.parse import urlparse, parse_qs
+            query = parse_qs(urlparse(self.path).query)
+            pdb_id = query.get('pdb', [None])[0]
+            receptor = query.get('receptor', [None])[0]
+            ligand = query.get('ligand', [None])[0]
+            
+            if pdb_id and receptor and ligand:
+                job_id = self.prepare_docking_job(pdb_id, receptor, ligand)
+                self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers()
+                self.wfile.write(json.dumps({'job_id': job_id}).encode())
+            else:
+                self.send_response(400); self.end_headers()
+        elif self.path == '/api/simulations/list':
+            jobs = []
+            if os.path.exists(SIM_WORKSPACE):
+                for d in os.listdir(SIM_WORKSPACE):
+                    status_file = os.path.join(SIM_WORKSPACE, d, 'status.json')
+                    if os.path.exists(status_file):
+                        with open(status_file, 'r') as f:
+                            jobs.append(json.load(f))
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(jobs).encode())
         else:
             super().do_GET()
 
-    def handle_cavity_search(self, pdb_id):
+    def handle_cavity_search(self, pdb_id, chain_id=None):
         try:
             req = urllib.request.Request(
                 f"https://files.rcsb.org/download/{pdb_id.upper()}.pdb",
                 headers={'User-Agent': 'ProStructure/1.0'})
             pdb_text = urllib.request.urlopen(req, timeout=25).read().decode('utf-8', errors='replace')
             atoms    = parse_pdb_atoms(pdb_text)
-            cavities = find_cavities(atoms)
-            result   = {'pdb_id': pdb_id.upper(), 'cavities': cavities, 'count': len(cavities)}
+            cavities = find_cavities(atoms, chain_id=chain_id)
+            result   = {'pdb_id': pdb_id.upper(), 'chain_id': chain_id, 'cavities': cavities, 'count': len(cavities)}
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
@@ -267,6 +392,44 @@ class ProStructureHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps({'error': str(e)}).encode())
+
+    def prepare_boltz_job(self, accession, partner, p_type):
+        job_id = f"boltz_{accession}_{os.urandom(2).hex()}"
+        job_dir = os.path.join(SIM_WORKSPACE, job_id)
+        os.makedirs(job_dir, exist_ok=True)
+        
+        # 1. Generate Boltz2 YAML
+        # We need the sequence from UniProt (mocking it for now if not passed, but app.js will pass it)
+        # Assuming partner is SMILES for small_molecule or sequence for protein
+        yaml_content = {
+            "version": 1,
+            "job_name": job_id,
+            "sequences": [
+                {"protein": {"id": "target", "sequence": "REPLACE_WITH_ACTUAL_SEQ"}}
+            ]
+        }
+        if p_type == 'protein':
+            yaml_content["sequences"].append({"protein": {"id": "binder", "sequence": partner}})
+        else:
+            yaml_content["sequences"].append({"ligand": {"id": "small_mol", "smiles": partner}})
+            
+        with open(os.path.join(job_dir, 'boltz_config.yaml'), 'w') as f:
+            json.dump(yaml_content, f, indent=2) # Using JSON as easy YAML proxy for now
+            
+        with open(os.path.join(job_dir, 'status.json'), 'w') as f:
+            json.dump({'status': 'prepared', 'job_id': job_id, 'type': 'boltz', 'command': f'boltz predict boltz_config.yaml'}, f)
+        
+        return job_id
+
+    def prepare_docking_job(self, pdb_id, receptor, ligand):
+        job_id = f"dock_{pdb_id}_{os.urandom(2).hex()}"
+        job_dir = os.path.join(SIM_WORKSPACE, job_id)
+        os.makedirs(job_dir, exist_ok=True)
+        
+        with open(os.path.join(job_dir, 'status.json'), 'w') as f:
+            json.dump({'status': 'prepared', 'job_id': job_id, 'type': 'docking', 'command': f'gnina -r receptor.pdb -l ligand.sdf --autobox_ligand receptor.pdb'}, f)
+            
+        return job_id
 
     def do_POST(self):
         if self.path == '/api/foldseek/search':

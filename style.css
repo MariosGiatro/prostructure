@@ -679,3 +679,42 @@ footer {
     border-color: var(--secondary);
     color: var(--secondary);
 }
+
+/* ── Protein Legend ────────────────────────── */
+.viewer-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-top: 1rem;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.2);
+    padding: 0.75rem;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+}
+
+/* ── Chain Visibility ──────────────────────── */
+.chain-toggle-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.chain-toggle-item {
+    transition: all 0.2s ease;
+}
+
+.chain-toggle-item:hover {
+    background: rgba(255, 255, 255, 0.1) !important;
+    border-color: rgba(255, 255, 255, 0.2) !important;
+}
+
+.chain-toggle-item.hidden {
+    opacity: 0.5;
+    background: rgba(255, 255, 255, 0.02) !important;
+    border-color: transparent !important;
+}
+
+.chain-toggle-item input[type="checkbox"] {
+    accent-color: var(--secondary);
+}

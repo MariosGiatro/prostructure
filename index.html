@@ -8,7 +8,7 @@
     <!-- PDBe Molstar – same viewer as UniProt -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pdbe-molstar@latest/build/pdbe-molstar.css">
     <script src="https://cdn.jsdelivr.net/npm/pdbe-molstar@latest/build/pdbe-molstar-plugin.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Outfit:wght@400;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Outfit:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="glass-background"></div>
@@ -59,6 +59,7 @@
                             <option value="element">Element</option>
                             <option value="secondary-structure">Secondary Structure</option>
                             <option value="sequence">Sequence Position</option>
+                            <option value="protein-name">Protein Name (Fixed Colors)</option>
                         </select>
                         <span id="plddt-only-note" class="toolbar-note hidden">⚠ pLDDT only applies to AlphaFold models</span>
                     </div>
@@ -112,6 +113,7 @@
                         <button class="tab-btn" data-tab="solved">Structures</button>
                         <button class="tab-btn" data-tab="pockets">Pockets</button>
                         <button class="tab-btn" data-tab="simulations">Simulations</button>
+                        <button class="tab-btn" data-tab="design">Design</button>
                     </div>
                     <div id="tabContent" class="tab-content">
                         <!-- Content injected here -->

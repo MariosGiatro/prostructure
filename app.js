@@ -29,6 +29,26 @@ let expandedPdb      = null;
 let isAlphaFold      = false;   // track whether current structure is AF
 let currentAccession = null;    // UniProt accession of shown structure
 let viewerPlugin     = null;    // PDBeMolstarPlugin instance
+let structureChains  = [];      // List of chains in the current structure
+let hiddenChains     = new Set(); // Set of hidden chain IDs
+let entityMetadata   = {};      // Map of PDB Entity ID -> { gene, accession, name }
+
+// ───────────────────────────────────────────────
+//  Consistent Protein Colors
+// ───────────────────────────────────────────────
+const GENE_COLOR_MAP = {
+    'PO5F1': '#ff4d4d', // Oct4 - Vibrant Coral
+    'OCT4':  '#ff4d4d',
+    'SOX2':  '#4ade80', // SOX2 - Mint Green
+    'NANOG': '#60a5fa', // NANOG - Sky Blue
+    'KLF4':  '#fbbf24', // KLF4 - Amber
+    'MYC':   '#a78bfa', // MYC - Lavender
+    'SRC':   '#f472b6', // SRC - Pink
+};
+
+const DEFAULT_GENE_COLORS = [
+    '#f472b6', '#fb923c', '#2dd4bf', '#818cf8', '#e879f9', '#94a3b8'
+];
 
 // ───────────────────────────────────────────────
 //  Helpers
@@ -44,6 +64,7 @@ const COLOR_THEME_MAP = {
     'element':            () => 'element-symbol',
     'secondary-structure':() => 'secondary-structure',
     'sequence':           () => 'sequence-id',
+    'protein-name':       () => 'protein-name', // Custom theme
 };
 
 // ───────────────────────────────────────────────
@@ -119,6 +140,12 @@ const applyColorTheme = () => {
     if (!viewerPlugin) return;
     const selected = UI.colorScheme.value;
     const themeKey = COLOR_THEME_MAP[selected]?.(isAlphaFold) ?? 'chain-id';
+    
+    if (selected === 'protein-name' && !isAlphaFold) {
+        applyProteinNameColors();
+        return;
+    }
+
     const effectiveTheme = (themeKey === 'plddt-confidence' && !isAlphaFold)
         ? 'chain-id' : themeKey;
     try {
@@ -126,6 +153,60 @@ const applyColorTheme = () => {
     } catch (e) {
         console.warn('setColor failed:', e);
     }
+};
+
+const applyProteinNameColors = () => {
+    if (!viewerPlugin || structureChains.length === 0) return;
+    
+    const selectData = [];
+    const usedGenes = new Set();
+    
+    structureChains.forEach((ch, idx) => {
+        const gene = ch.gene;
+        let colorHex = GENE_COLOR_MAP[gene.toUpperCase()] || 
+                       GENE_COLOR_MAP[gene.split(' ')[0].toUpperCase()];
+        
+        if (!colorHex) {
+            // Assign a stable default color based on gene name hash or index
+            const hash = gene.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+            colorHex = DEFAULT_GENE_COLORS[hash % DEFAULT_GENE_COLORS.length];
+        }
+        
+        selectData.push({
+            auth_asym_id: ch.id,
+            color: hexToRgb(colorHex)
+        });
+        usedGenes.add(`${gene}|${colorHex}`);
+    });
+
+    try {
+        viewerPlugin.visual.select({
+            data: selectData,
+            nonSelectedColor: { r: 50, g: 50, b: 60 }
+        });
+        
+        // Show legend
+        renderProteinLegend(usedGenes);
+    } catch (e) {
+        console.warn('Protein name coloring failed', e);
+    }
+};
+
+const renderProteinLegend = (usedGenes) => {
+    let legend = document.getElementById('protein-legend');
+    if (!legend) {
+        legend = document.createElement('div');
+        legend.id = 'protein-legend';
+        legend.className = 'viewer-legend';
+        UI.plddtLegend.parentNode.appendChild(legend);
+    }
+    
+    UI.plddtLegend.classList.add('hidden');
+    legend.classList.remove('hidden');
+    legend.innerHTML = Array.from(usedGenes).map(ug => {
+        const [name, color] = ug.split('|');
+        return `<div class="legend-item"><span class="color" style="background:${color}"></span> ${name}</div>`;
+    }).join('');
 };
 
 // ───────────────────────────────────────────────
@@ -150,6 +231,74 @@ const loadStructure = async (accession) => {
         // Default to pLDDT for AF
         UI.colorScheme.value = 'plddt';
         await loadAlphaFoldStructure(accession);
+    }
+    // After loading structure, fetch full metadata for all entities
+    if (!isAlphaFold) {
+        const pdbId = UI.structureSource.innerText.replace('PDB:', '').trim();
+        await fetchFullEntityMetadata(pdbId);
+    }
+};
+
+/** Fetch metadata for all polymer entities to map chains to genes/names */
+const fetchFullEntityMetadata = async (pdbId) => {
+    try {
+        const res = await fetch(`/api/pdb/ligands/${pdbId}`);
+        const entry = await res.json();
+        const polymerIds = entry.rcsb_entry_container_identifiers.polymer_entity_ids || [];
+        
+        entityMetadata = {};
+        structureChains = [];
+
+        await Promise.all(polymerIds.map(async eid => {
+            const r = await fetch(`/api/pdb/polymer/${pdbId}_${eid}`);
+            if (!r.ok) return;
+            const d = await r.json();
+            
+            const gene = d.rcsb_entity_source_organism?.[0]?.rcsb_gene_name?.[0]?.value || 
+                         d.rcsb_polymer_entity?.pdbx_description || `Entity ${eid}`;
+            const accession = d.rcsb_polymer_entity_align?.[0]?.reference_database_accession;
+            const chains = d.entity_poly.pdbx_strand_id.split(',');
+
+            entityMetadata[eid] = { gene, accession, chains };
+            chains.forEach(ch => {
+                structureChains.push({ id: ch.trim(), gene, entityId: eid });
+            });
+        }));
+
+        // Sort chains alphabetically
+        structureChains.sort((a, b) => a.id.localeCompare(b.id));
+        
+        // Re-render pockets to update chain selector if on that tab
+        const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
+        if (activeTab === 'pockets') renderPockets();
+        
+    } catch (e) {
+        console.error('Failed to fetch entity metadata', e);
+    }
+};
+
+const hexToRgb = (hex) => {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result ? {
+        r: parseInt(result[1], 16),
+        g: parseInt(result[2], 16),
+        b: parseInt(result[3], 16)
+    } : { r: 200, g: 200, b: 200 };
+};
+
+/** Toggle visibility of a chain */
+window.toggleChainVisibility = (chainId, visible) => {
+    if (!viewerPlugin) return;
+    if (visible) hiddenChains.delete(chainId);
+    else hiddenChains.add(chainId);
+
+    try {
+        viewerPlugin.visual.setVisibility({
+            data: [{ auth_asym_id: chainId }],
+            visible: visible
+        });
+    } catch (e) {
+        console.warn('setVisibility failed', e);
     }
 };
 
@@ -246,6 +395,7 @@ const updateTabs = (tab) => {
     else if (tab === 'isoforms')    renderIsoforms();
     else if (tab === 'pockets')     renderPockets();
     else if (tab === 'simulations') renderSimulations();
+    else if (tab === 'design')      renderDesign();
 };
 
 // ───────────────────────────────────────────────
@@ -433,14 +583,245 @@ const renderVariants = () => {
     UI.tabContent.appendChild(container);
 };
 
-const renderSimulations = () => {
-    UI.tabContent.innerHTML = `
-        <div class="coming-soon-box">
-            <div class="coming-soon-icon">⚗️</div>
-            <div class="coming-soon-title">MD Simulations</div>
-            <div class="coming-soon-sub">Load your <code>enriched_results.csv</code> to view MMPBSA binding energies, RMSD trajectories and enrichment metrics. Coming soon.</div>
+const renderSimulations = async () => {
+    const content = document.getElementById('tabContent');
+    const pdbId = UI.structureSource.innerText.replace('PDB:', '').trim();
+    if (!content) return;
+
+    content.innerHTML = `
+        <div class="simulation-lab">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; border-bottom:1px solid var(--border); padding-bottom:0.75rem;">
+                <h4 style="margin:0;">🧪 Simulation Lab</h4>
+                <div class="badge" style="background:var(--secondary); font-size:0.7rem;">GROMACS + MMPBSA Pipeline</div>
+            </div>
+            
+            <!-- Setup Section -->
+            <div class="card" style="background:rgba(255,255,255,0.03); margin-bottom:1.5rem; border:1px solid rgba(255,255,255,0.08);">
+                <div style="font-size:0.85rem; font-weight:600; margin-bottom:1rem; color:var(--accent);">Configure New MD Simulation</div>
+                
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1rem; margin-bottom:1rem;">
+                    <div>
+                        <label class="toolbar-label" style="display:block; margin-bottom:0.4rem;">Receptor Chain</label>
+                        <select id="sim-receptor" class="color-select" style="width:100%;">
+                            ${structureChains.map(ch => `<option value="${ch.id}">Chain ${ch.id} (${ch.gene})</option>`).join('')}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="toolbar-label" style="display:block; margin-bottom:0.4rem;">Ligand / Partner</label>
+                        <select id="sim-ligand" class="color-select" style="width:100%;">
+                            <optgroup label="Protein Chains (Dimer Sim)">
+                                ${structureChains.map(ch => `<option value="PROT_${ch.id}">Chain ${ch.id} (${ch.gene})</option>`).join('')}
+                            </optgroup>
+                            <optgroup id="sim-small-mols" label="Small Molecules (GAFF2 Sim)">
+                                <option disabled>Detecting ligands...</option>
+                            </optgroup>
+                        </select>
+                    </div>
+                </div>
+                
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <div style="font-size:0.75rem; color:var(--text-muted); max-width:70%;">
+                        Standard 100ns MD production run with 5 replicates and MMPBSA binding energy analysis. 
+                        Requires GPU-enabled GROMACS environment.
+                    </div>
+                    <button class="pocket-highlight-btn" style="background:var(--primary); color:white; border:none; padding:0.6rem 1.2rem; font-weight:700;"
+                            onclick="launchSimulation('${pdbId}')">
+                        🚀 Launch Simulation
+                    </button>
+                </div>
+            </div>
+
+            <!-- Active / Recent Jobs Section -->
+            <div id="sim-job-list">
+                <div class="pocket-loading"><span class="spinner"></span> Checking job status...</div>
+            </div>
         </div>
     `;
+
+    // Fetch ligands for the dropdown
+    fetchLigandsForSim(pdbId);
+    // Fetch job list
+    refreshSimulationJobs();
+};
+
+const fetchLigandsForSim = async (pdbId) => {
+    try {
+        const res = await fetch(`/api/pdb/ligands/${pdbId}`);
+        const data = await res.json();
+        const ligands = data.rcsb_entry_container_identifiers.non_polymer_entity_ids || [];
+        const container = document.getElementById('sim-small-mols');
+        if (!container) return;
+
+        if (ligands.length === 0) {
+            container.innerHTML = '<option disabled>No small molecules found</option>';
+            return;
+        }
+
+        const options = await Promise.all(ligands.map(async lid => {
+            const r = await fetch(`/api/pdb/nonpoly_entity/${pdbId}/${lid}`);
+            const d = await r.json();
+            const name = d.rcsb_nonpolymer_entity?.pdbx_description || `Ligand ${lid}`;
+            const resname = d.rcsb_nonpolymer_instance_annotation?.[0]?.comp_id || name.split(' ')[0];
+            return `<option value="MOL_${resname}">${name} (${resname})</option>`;
+        }));
+        container.innerHTML = options.join('');
+    } catch (e) {
+        console.error('Failed to fetch ligands for sim', e);
+    }
+};
+
+const refreshSimulationJobs = async () => {
+    const container = document.getElementById('sim-job-list');
+    if (!container) return;
+
+    try {
+        const res = await fetch('/api/simulations/list');
+        const jobs = await res.json();
+
+        if (jobs.length === 0) {
+            container.innerHTML = `
+                <div class="pocket-empty" style="border-top:1px solid var(--border); padding-top:2rem;">
+                    <div style="font-size:2rem; margin-bottom:0.5rem;">📡</div>
+                    <div style="font-weight:600;">No active or past simulations found.</div>
+                    <div style="font-size:0.8rem; color:var(--text-muted);">Launch a simulation to see it appear here.</div>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = `
+            <div style="font-size:0.85rem; font-weight:600; margin-bottom:0.75rem;">📋 Recent Job Activity</div>
+            <div style="display:flex; flex-direction:column; gap:0.6rem;">
+                ${jobs.map(job => `
+                    <div class="pocket-card" style="margin-bottom:0; display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <div style="font-weight:700; font-size:0.9rem;">Job: ${job.job_id}</div>
+                            <div style="font-size:0.75rem; color:var(--text-muted);">Structure: <strong>${job.pdb_id}</strong> | Status: <span style="color:var(--accent);">${job.status}</span></div>
+                        </div>
+                        <div style="display:flex; gap:0.5rem;">
+                             <button class="res-chip" style="cursor:pointer; background:rgba(255,255,255,0.05);">Log</button>
+                             <button class="res-chip" style="cursor:pointer; border-color:var(--primary);">View Result</button>
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    } catch (e) {
+        container.innerHTML = `<div class="text-sub">Failed to load jobs.</div>`;
+    }
+};
+
+window.launchSimulation = async (pdbId) => {
+    const receptor = document.getElementById('sim-receptor').value;
+    const ligandVal = document.getElementById('sim-ligand').value;
+    const type = ligandVal.startsWith('PROT_') ? 'protein' : 'smallmol';
+    const ligand = ligandVal.replace('PROT_', '').replace('MOL_', '');
+
+    try {
+        const res = await fetch(`/api/simulations/run?pdb=${pdbId}&receptor=${receptor}&ligand=${ligand}&type=${type}`);
+        const data = await res.json();
+        if (data.job_id) {
+            alert(`Simulation job ${data.job_id} has been queued!`);
+            refreshSimulationJobs();
+        }
+    } catch (e) {
+        alert('Failed to launch simulation: ' + e.message);
+    }
+};
+
+/** Molecular Design: Boltz2 and Docking */
+window.renderDesign = async () => {
+    const content = document.getElementById('tabContent');
+    const pdbId = UI.structureSource.innerText.replace('PDB:', '').trim();
+    const accession = currentAccession || '';
+    if (!content) return;
+
+    content.innerHTML = `
+        <div class="design-lab">
+            <!-- Boltz-2 Section -->
+            <div class="card" style="background:rgba(99,102,241,0.05); margin-bottom:1.5rem; border:1px solid rgba(99,102,241,0.2);">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+                    <div style="font-size:1rem; font-weight:700; color:var(--primary);">🌀 Boltz-2 Co-folding</div>
+                    <div class="badge" style="background:var(--primary);">New</div>
+                </div>
+                
+                <div style="margin-bottom:1rem;">
+                    <label class="toolbar-label" style="display:block; margin-bottom:0.4rem;">Target Sequence (Auto-filled from UniProt)</label>
+                    <textarea id="boltz-target-seq" class="color-select" style="width:100%; height:60px; font-family:monospace; font-size:0.75rem; padding:0.5rem;" readonly>${currentData?.sequence?.value || ''}</textarea>
+                </div>
+                
+                <div style="margin-bottom:1rem;">
+                    <label class="toolbar-label" style="display:block; margin-bottom:0.4rem;">Binder/Ligand (SMILES or Protein Sequence)</label>
+                    <textarea id="boltz-partner" class="color-select" style="width:100%; height:60px; font-family:monospace; font-size:0.75rem; padding:0.5rem;" placeholder="Paste SMILES (e.g. CC(=O)OC1=CC=CC=C1C(=O)O) or Amino Acid sequence..."></textarea>
+                </div>
+                
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <div style="font-size:0.75rem; color:var(--text-muted);">
+                        Boltz-2 predicts structures for protein-protein and protein-ligand complexes.
+                    </div>
+                    <button class="pocket-highlight-btn" style="background:var(--primary); color:white; border:none;" onclick="runBoltz('${accession}')">
+                        🔮 Generate YAML & Predict
+                    </button>
+                </div>
+            </div>
+
+            <!-- Docking Section -->
+            <div class="card" style="background:rgba(16,185,129,0.05); border:1px solid rgba(16,185,129,0.2);">
+                <div style="font-size:1rem; font-weight:700; color:#10b981; margin-bottom:1rem;">💊 Molecular Docking (Gnina)</div>
+                
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1rem; margin-bottom:1rem;">
+                    <div>
+                        <label class="toolbar-label" style="display:block; margin-bottom:0.4rem;">Receptor</label>
+                        <select id="dock-receptor" class="color-select" style="width:100%;">
+                            ${structureChains.map(ch => `<option value="${ch.id}">Chain ${ch.id}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="toolbar-label" style="display:block; margin-bottom:0.4rem;">Ligand (SMILES)</label>
+                        <input id="dock-ligand" class="color-select" style="width:100%;" placeholder="e.g. C1=CC=C(C=C1)C(=O)O">
+                    </div>
+                </div>
+                
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <div style="font-size:0.75rem; color:var(--text-muted);">
+                        Automated docking into selected chain using Gnina's CNN scoring.
+                    </div>
+                    <button class="pocket-highlight-btn" style="background:#10b981; color:white; border:none;" onclick="runDocking('${pdbId}')">
+                        🎯 Run Docking
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+};
+
+window.runBoltz = async (accession) => {
+    const partner = document.getElementById('boltz-partner').value.trim();
+    if (!partner) { alert('Please provide a binder sequence or SMILES.'); return; }
+    
+    const type = /^[ARNDCEQGHILKMFPSTWYV\s]+$/i.test(partner) ? 'protein' : 'ligand';
+    
+    try {
+        const res = await fetch(`/api/boltz/run?accession=${accession}&partner=${encodeURIComponent(partner)}&type=${type}`);
+        const data = await res.json();
+        alert(`Boltz-2 job ${data.job_id} prepared. Command: boltz predict boltz_config.yaml`);
+    } catch (e) {
+        alert('Failed to prepare Boltz job');
+    }
+};
+
+window.runDocking = async (pdbId) => {
+    const receptor = document.getElementById('dock-receptor').value;
+    const ligand = document.getElementById('dock-ligand').value.trim();
+    if (!ligand) { alert('Please provide a ligand SMILES.'); return; }
+
+    try {
+        const res = await fetch(`/api/docking/run?pdb=${pdbId}&receptor=${receptor}&ligand=${encodeURIComponent(ligand)}`);
+        const data = await res.json();
+        alert(`Docking job ${data.job_id} prepared.`);
+    } catch (e) {
+        alert('Failed to prepare Docking job');
+    }
 };
 
 // ───────────────────────────────────────────────
@@ -586,8 +967,43 @@ const renderPockets = async () => {
     window._pockets = pockets;
     }  // end else (pockets.length > 0)
 
+    // ─── Chain Visibility section ──────────────────────────────────────────
+    const visibilitySection = document.createElement('div');
+    visibilitySection.className = 'visibility-section';
+    visibilitySection.style.cssText = 'margin-bottom:1rem; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:1rem;';
+    
+    let visibilityHtml = `
+        <div style="font-size:0.92rem;font-weight:600;color:var(--text-primary);margin-bottom:0.6rem;">
+            🧬 Chain Visibility
+        </div>
+        <div class="chain-toggle-list" style="display:flex; flex-wrap:wrap; gap:0.5rem;">
+    `;
+    
+    structureChains.forEach(ch => {
+        const isHidden = hiddenChains.has(ch.id);
+        visibilityHtml += `
+            <div class="chain-toggle-item ${isHidden ? 'hidden' : ''}" 
+                 onclick="const cb = this.querySelector('input'); cb.checked = !cb.checked; toggleChainVisibility('${ch.id}', cb.checked); this.classList.toggle('hidden', !cb.checked);"
+                 style="cursor:pointer; background:rgba(255,255,255,0.05); padding:0.3rem 0.6rem; border-radius:6px; font-size:0.8rem; display:flex; align-items:center; gap:0.4rem; border:1px solid rgba(255,255,255,0.1);">
+                <input type="checkbox" ${isHidden ? '' : 'checked'} style="pointer-events:none; margin:0;">
+                <span>Chain <strong>${ch.id}</strong> <span style="opacity:0.6;font-size:0.75rem;">(${ch.gene})</span></span>
+            </div>
+        `;
+    });
+    
+    if (structureChains.length === 0) visibilityHtml += '<div class="text-sub">No chains detected.</div>';
+    
+    visibilityHtml += '</div>';
+    visibilitySection.innerHTML = visibilityHtml;
+    pocketList.insertBefore(visibilitySection, pocketList.firstChild);
+
+
     // ─── Geometric Cavity Search section (always shown) ──────────────────────
     const divider = document.createElement('div');
+
+    const chainOptions = structureChains.map(ch => 
+        `<option value="${ch.id}">Chain ${ch.id} (${ch.gene})</option>`
+    ).join('');
 
     divider.style.cssText = 'margin:1.2rem 0 0.8rem;border-top:1px solid rgba(255,255,255,0.08);padding-top:1rem;';
     divider.innerHTML = `
@@ -597,14 +1013,19 @@ const renderPockets = async () => {
                     🧪 Geometric Cavity Search
                 </div>
                 <div style="font-size:0.78rem;color:var(--text-muted);">
-                    Pure-geometry pocket prediction — finds all surface clefts &amp; buried cavities
-                    regardless of whether a ligand is present. Uses two-probe solvent accessibility.
+                    Pure-geometry pocket prediction — finds all surface clefts &amp; buried cavities.
                 </div>
             </div>
-            <button class="pocket-highlight-btn" id="run-cavity-btn"
-                onclick="runCavitySearch('${shownPdbId}')">
-                🔬 Run Search
-            </button>
+            <div style="display:flex; gap:0.5rem; align-items:center;">
+                <select id="cavity-chain-select" class="color-select" style="padding:0.4rem; height:auto; font-size:0.8rem;">
+                    <option value="">Entire Structure</option>
+                    ${chainOptions}
+                </select>
+                <button class="pocket-highlight-btn" id="run-cavity-btn"
+                    onclick="runCavitySearch('${shownPdbId}')">
+                    🔬 Run Search
+                </button>
+            </div>
         </div>
         <div id="cavity-results" style="margin-top:0.8rem;"></div>
     `;
@@ -615,13 +1036,18 @@ const renderPockets = async () => {
 window.runCavitySearch = async (pdbId) => {
     const btn = document.getElementById('run-cavity-btn');
     const results = document.getElementById('cavity-results');
+    const chainSelect = document.getElementById('cavity-chain-select');
+    const selectedChain = chainSelect ? chainSelect.value : '';
+    
     if (!results) return;
 
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Computing…'; }
-    results.innerHTML = `<div class="pocket-loading"><span class="spinner"></span> Running pocket detection on <strong>${pdbId.toUpperCase()}</strong> — this may take 5–15 seconds…</div>`;
+    const chainText = selectedChain ? `Chain <strong>${selectedChain}</strong>` : 'entire structure';
+    results.innerHTML = `<div class="pocket-loading"><span class="spinner"></span> Running pocket detection on ${chainText} — this may take 5–15 seconds…</div>`;
 
     try {
-        const resp = await fetch(`/api/cavity_search/${pdbId}`);
+        const url = selectedChain ? `/api/cavity_search/${pdbId}/${selectedChain}` : `/api/cavity_search/${pdbId}`;
+        const resp = await fetch(url);
         if (!resp.ok) throw new Error(`Server error ${resp.status}`);
         const data = await resp.json();
 
