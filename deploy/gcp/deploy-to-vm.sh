@@ -46,6 +46,7 @@ trap cleanup EXIT
   COPYFILE_DISABLE=1 tar czf "$TMP" \
     Dockerfile pyproject.toml uv.lock \
     server.py index.html style.css app.js \
+    media \
     deploy/Caddyfile deploy/docker-compose.yml
 )
 

@@ -7,6 +7,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-cache
 
 COPY server.py index.html app.js style.css ./
+COPY media ./media
 
 ENV PORT=8000
 EXPOSE 8000
