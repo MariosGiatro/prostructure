@@ -97,13 +97,11 @@ const initViewer = () => new Promise((resolve, reject) => {
     
     viewerPlugin = new PDBeMolstarPlugin();
     const options = {
-        hideControls: false,
-        hideCanvasControls: ['selection', 'animation'],
-        sequencePanel: false,
+        moleculeId: '1cbs', // dummy to init
         pdbeLink: false,
-        loadingOverlay: false,
-        expanded: false,
         bgColor: { r: 15, g: 23, b: 42 },
+        landscape: true,
+        hideControls: true
     };
 
     viewerPlugin.render(el, options);
@@ -129,12 +127,24 @@ const loadPDBStructure = async (pdbId) => {
         const viewer = await initViewer();
         // visual.update is the correct API for the pdbe-molstar JS plugin
         await viewer.visual.update({ moleculeId: pdbId.toLowerCase(), assemblyId: '1' });
-        await new Promise(r => setTimeout(r, 400));
+        await new Promise(r => setTimeout(r, 600));
         applyColorTheme();
     } catch (e) {
         console.error('loadPDBStructure failed:', e);
+        showViewerError('Failed to load PDB structure. Try refreshing.');
     }
 };
+
+const showViewerError = (msg) => {
+    const el = document.getElementById('molstar-viewer');
+    if (el) {
+        el.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#ff4d4d;text-align:center;padding:2rem;background:#0f172a;border-radius:12px;">
+            <div style="font-size:2rem;margin-bottom:1rem;">⚠️</div>
+            <div>${msg}</div>
+            <button onclick="location.reload()" class="pdb-btn-expand" style="margin-top:1rem;">Reload Dashboard</button>
+        </div>`;
+    }
+}
 
 /** Load an AlphaFold structure by UniProt accession */
 const loadAlphaFoldStructure = async (accession) => {
