@@ -50,6 +50,11 @@ trap cleanup EXIT
     deploy/Caddyfile deploy/docker-compose.yml
 )
 
+echo "Cleaning up old bundle on VM..."
+gcloud compute ssh "$INSTANCE" \
+  --project="$PROJECT" --zone="$ZONE" \
+  --command="sudo rm -f /tmp/bundle.tgz" || true
+
 echo "Uploading bundle to ${INSTANCE} (${ZONE})..."
 gcloud compute scp "$TMP" "${INSTANCE}:/tmp/bundle.tgz" \
   --project="$PROJECT" --zone="$ZONE"
