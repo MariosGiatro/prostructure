@@ -83,11 +83,14 @@ const COLOR_THEME_MAP = {
  * Called once, the first time a search result is shown.
  */
 const initViewer = () => new Promise((resolve, reject) => {
-    if (viewerPlugin) { resolve(viewerPlugin); return; }
+    if (viewerPlugin && viewerPlugin.visual) { resolve(viewerPlugin); return; }
 
     const el = document.getElementById('molstar-viewer');
     if (!el) { reject(new Error('molstar-viewer element not found')); return; }
 
+    // Clear element before render to avoid double-init issues
+    el.innerHTML = '';
+    
     viewerPlugin = new PDBeMolstarPlugin();
     const options = {
         hideControls: false,
@@ -101,10 +104,14 @@ const initViewer = () => new Promise((resolve, reject) => {
 
     viewerPlugin.render(el, options);
 
-    // Wait until visual API is available (means render is complete)
+    // Wait until visual API is available AND initialized
+    let attempts = 0;
     const ready = () => {
+        attempts++;
         if (viewerPlugin.visual && typeof viewerPlugin.visual.update === 'function') {
             resolve(viewerPlugin);
+        } else if (attempts > 50) {
+            reject(new Error('Molstar viewer failed to initialize in time'));
         } else {
             setTimeout(ready, 150);
         }
@@ -242,6 +249,7 @@ const loadStructure = async (accession) => {
         UI.plddtLegend.classList.add('hidden');
         UI.plddtNote.classList.remove('hidden');   // warn: pLDDT n/a for PDB
         await loadPDBStructure(pdbId);
+        await fetchFullEntityMetadata(pdbId);
     } else {
         isAlphaFold = true;
         UI.structureSource.innerText = 'AlphaFold (Predicted)';
@@ -249,12 +257,11 @@ const loadStructure = async (accession) => {
         UI.plddtNote.classList.add('hidden');
         // Default to pLDDT for AF
         UI.colorScheme.value = 'plddt';
+        
+        // For AF, manually set the single chain metadata
+        structureChains = [{ id: 'A', gene: UI.geneName.innerText || 'Target', entityId: '1' }];
+        
         await loadAlphaFoldStructure(accession);
-    }
-    // After loading structure, fetch full metadata for all entities
-    if (!isAlphaFold) {
-        const pdbId = UI.structureSource.innerText.replace('PDB:', '').trim();
-        await fetchFullEntityMetadata(pdbId);
     }
     
     // Auto-apply protein-name scheme if we find a gene of interest
@@ -935,7 +942,7 @@ const renderPockets = async () => {
 
     // Which PDB is currently shown in the viewer?
     const rawSource = UI.structureSource.innerText.replace('PDB:', '').trim();
-    const shownPdbId = (rawSource || pdbEntries[0].id).toLowerCase();
+    const shownPdbId = (rawSource.length === 4 ? rawSource : (pdbEntries[0]?.id || currentAccession)).toLowerCase();
 
     UI.tabContent.innerHTML = `
         <div class="pocket-header">
