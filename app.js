@@ -63,59 +63,53 @@ const DEFAULT_GENE_COLORS = [
 const isSequence = (str) =>
     /^[ARNDCEQGHILKMFPSTWYV\s]+$/i.test(str.trim()) && str.trim().length > 20;
 
-// Map dropdown value → pdbe-molstar color theme name
-const COLOR_THEME_MAP = {
-    'default':            isAF => isAF ? 'plddt-confidence' : 'chain-id',
-    'plddt':              () => 'plddt-confidence',
-    'chain':              () => 'chain-id',
-    'element':            () => 'element-symbol',
-    'secondary-structure':() => 'secondary-structure',
-    'sequence':           () => 'sequence-id',
-    'protein-name':       () => 'protein-name', // Custom theme
-};
-
 // ───────────────────────────────────────────────
 //  Viewer  (PDBeMolstarPlugin JS API)
 // ───────────────────────────────────────────────
 
 /**
- * Initialize PDBeMolstarPlugin into the #molstar-viewer div.
- * Called once, the first time a search result is shown.
+ * Create a fresh PDBeMolstarPlugin instance with the given options.
+ * Destroys any existing viewer first to avoid double-init issues.
  */
-const initViewer = () => new Promise((resolve, reject) => {
+const createViewer = (options) => new Promise((resolve, reject) => {
     if (typeof PDBeMolstarPlugin === 'undefined') {
-        reject(new Error('PDBeMolstarPlugin library not loaded. Check your internet connection or CDN links.'));
+        reject(new Error('PDBeMolstarPlugin library not loaded.'));
         return;
     }
-    if (viewerPlugin && viewerPlugin.visual) { resolve(viewerPlugin); return; }
 
     const el = document.getElementById('molstar-viewer');
     if (!el) { reject(new Error('molstar-viewer element not found')); return; }
 
-    // Clear element before render to avoid double-init issues
+    // Destroy previous instance cleanly
+    if (viewerPlugin) {
+        try { viewerPlugin.plugin?.dispose?.(); } catch (_) {}
+        viewerPlugin = null;
+    }
     el.innerHTML = '';
-    
+
     viewerPlugin = new PDBeMolstarPlugin();
-    const options = {
-        moleculeId: '1cbs', // dummy to init
+
+    const mergedOpts = {
         pdbeLink: false,
         bgColor: { r: 15, g: 23, b: 42 },
         landscape: true,
-        hideControls: true
+        hideControls: true,
+        hideStructure: ['water'],
+        ...options
     };
 
-    viewerPlugin.render(el, options);
+    viewerPlugin.render(el, mergedOpts);
 
-    // Wait until visual API is available AND initialized
+    // Wait until visual API is available
     let attempts = 0;
     const ready = () => {
         attempts++;
-        if (viewerPlugin.visual && typeof viewerPlugin.visual.update === 'function') {
+        if (viewerPlugin && viewerPlugin.visual && typeof viewerPlugin.visual.update === 'function') {
             resolve(viewerPlugin);
-        } else if (attempts > 50) {
+        } else if (attempts > 60) {
             reject(new Error('Molstar viewer failed to initialize in time'));
         } else {
-            setTimeout(ready, 150);
+            setTimeout(ready, 200);
         }
     };
     ready();
@@ -124,10 +118,12 @@ const initViewer = () => new Promise((resolve, reject) => {
 /** Load a PDB structure by 4-letter ID */
 const loadPDBStructure = async (pdbId) => {
     try {
-        const viewer = await initViewer();
-        // visual.update is the correct API for the pdbe-molstar JS plugin
-        await viewer.visual.update({ moleculeId: pdbId.toLowerCase(), assemblyId: '1' });
-        await new Promise(r => setTimeout(r, 600));
+        await createViewer({
+            moleculeId: pdbId.toLowerCase(),
+            assemblyId: '1'
+        });
+        // Allow the structure to fully render
+        await new Promise(r => setTimeout(r, 800));
         applyColorTheme();
     } catch (e) {
         console.error('loadPDBStructure failed:', e);
@@ -150,36 +146,37 @@ const showViewerError = (msg) => {
 const loadAlphaFoldStructure = async (accession) => {
     const url = `https://alphafold.ebi.ac.uk/files/AF-${accession}-F1-model_v4.cif`;
     try {
-        const viewer = await initViewer();
-        // For custom URLs use customData option
-        await viewer.visual.update({
+        await createViewer({
             customData: { url, format: 'mmcif' },
-            superpose: false
+            superpose: false,
+            alphafoldView: true
         });
-        await new Promise(r => setTimeout(r, 600));
+        await new Promise(r => setTimeout(r, 800));
         applyColorTheme();
     } catch (e) {
         console.error('loadAlphaFoldStructure failed:', e);
+        showViewerError('Failed to load AlphaFold structure.');
     }
 };
 
-/** Apply the selected color theme via viewerPlugin.visual.setColor() */
+/** Apply the selected color theme */
 const applyColorTheme = () => {
-    if (!viewerPlugin) return;
+    if (!viewerPlugin || !viewerPlugin.visual) return;
     const selected = UI.colorScheme.value;
-    const themeKey = COLOR_THEME_MAP[selected]?.(isAlphaFold) ?? 'chain-id';
-    
+
     if (selected === 'protein-name') {
         applyProteinNameColors();
         return;
     }
 
-    const effectiveTheme = (themeKey === 'plddt-confidence' && !isAlphaFold)
-        ? 'chain-id' : themeKey;
+    // For non-custom themes, reset any selections and let the viewer
+    // use its default rendering. Color themes like chain-id, element-symbol
+    // etc. are baked into the viewer via reset.
     try {
-        viewerPlugin.visual.setColor({ color: effectiveTheme });
+        viewerPlugin.visual.clearSelection();
+        viewerPlugin.visual.reset({ theme: true, camera: false });
     } catch (e) {
-        console.warn('setColor failed:', e);
+        console.warn('applyColorTheme failed:', e);
     }
 };
 
@@ -336,24 +333,31 @@ const hexToRgb = (hex) => {
     } : { r: 200, g: 200, b: 200 };
 };
 
-/** Toggle visibility of a chain */
+/** Toggle visibility of a chain using select API (dims hidden chains) */
 window.toggleChainVisibility = (chainId, visible) => {
-    if (!viewerPlugin) return;
+    if (!viewerPlugin || !viewerPlugin.visual) return;
     if (visible) hiddenChains.delete(chainId);
     else hiddenChains.add(chainId);
 
+    // Re-apply coloring: show visible chains normally, hide others
     try {
-        // Try both auth_asym_id and label_asym_id for maximum compatibility
-        viewerPlugin.visual.setVisibility({
-            data: [
-                { auth_asym_id: chainId },
-                { label_asym_id: chainId },
-                { struct_asym_id: chainId }
-            ],
-            visible: visible
+        const visibleChains = structureChains.filter(ch => !hiddenChains.has(ch.id));
+        if (visibleChains.length === structureChains.length) {
+            // All visible → clear selection to show defaults
+            viewerPlugin.visual.clearSelection();
+            return;
+        }
+        // Color visible chains; dim hidden ones
+        const data = visibleChains.map(ch => ({
+            auth_asym_id: ch.id,
+            color: { r: 180, g: 180, b: 200 }, // neutral visible
+        }));
+        viewerPlugin.visual.select({
+            data: data,
+            nonSelectedColor: { r: 15, g: 23, b: 42 }, // match background = effectively hidden
         });
     } catch (e) {
-        console.warn('setVisibility failed', e);
+        console.warn('toggleChainVisibility failed', e);
     }
 };
 
@@ -451,7 +455,40 @@ const updateTabs = (tab) => {
     else if (tab === 'isoforms')    renderIsoforms();
     else if (tab === 'pockets')     renderPockets();
     else if (tab === 'simulations') renderSimulations();
-    else if (tab === 'design')      renderDesign();
+    else if (tab === 'design')      window.renderDesign();
+};
+
+/** Isoforms tab */
+const renderIsoforms = () => {
+    const isoforms = currentData?.comments?.filter(c => c.commentType === 'ALTERNATIVE PRODUCTS') || [];
+    if (isoforms.length === 0) {
+        UI.tabContent.innerHTML = '<p>No isoform information available for this protein.</p>';
+        return;
+    }
+    const container = document.createElement('div');
+    container.className = 'variant-list';
+    isoforms.forEach(iso => {
+        const events = iso.isoforms || [];
+        events.forEach(isoform => {
+            const item = document.createElement('div');
+            item.className = 'variant-item';
+            const seqIds = isoform.isoformSequenceStatus === 'Described'
+                ? isoform.isoformIds?.join(', ') || 'N/A'
+                : 'Not described';
+            item.innerHTML = `
+                <div>
+                    <div class="variant-label">${isoform.name?.value || 'Isoform'}</div>
+                    <div class="text-sub">IDs: ${seqIds}</div>
+                </div>
+                <span class="pathogenicity path-uncertain">${isoform.isoformSequenceStatus || 'Unknown'}</span>
+            `;
+            container.appendChild(item);
+        });
+    });
+    if (container.innerHTML === '') {
+        container.innerHTML = '<p>No detailed isoform data found.</p>';
+    }
+    UI.tabContent.appendChild(container);
 };
 
 // ───────────────────────────────────────────────
@@ -596,11 +633,13 @@ const fetchIconsSummary = async (pdbId) => {
 };
 
 /** Load a specific PDB entry in the main viewer from the Structures tab */
-window.loadPDBInViewer = (pdbId) => {
+window.loadPDBInViewer = async (pdbId) => {
     isAlphaFold = false;
+    hiddenChains.clear();
     UI.structureSource.innerText = `PDB: ${pdbId}`;
     UI.plddtLegend.classList.add('hidden');
-    loadPDBStructure(pdbId);
+    await loadPDBStructure(pdbId);
+    await fetchFullEntityMetadata(pdbId);
     document.querySelector('.viewer-card').scrollIntoView({ behavior: 'smooth' });
 };
 
