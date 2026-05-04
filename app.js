@@ -83,6 +83,10 @@ const COLOR_THEME_MAP = {
  * Called once, the first time a search result is shown.
  */
 const initViewer = () => new Promise((resolve, reject) => {
+    if (typeof PDBeMolstarPlugin === 'undefined') {
+        reject(new Error('PDBeMolstarPlugin library not loaded. Check your internet connection or CDN links.'));
+        return;
+    }
     if (viewerPlugin && viewerPlugin.visual) { resolve(viewerPlugin); return; }
 
     const el = document.getElementById('molstar-viewer');
