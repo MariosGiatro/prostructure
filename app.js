@@ -39,11 +39,18 @@ let entityMetadata   = {};      // Map of PDB Entity ID -> { gene, accession, na
 const GENE_COLOR_MAP = {
     'PO5F1': '#ff4d4d', // Oct4 - Vibrant Coral
     'OCT4':  '#ff4d4d',
+    'PO5F1_HUMAN': '#ff4d4d',
     'SOX2':  '#4ade80', // SOX2 - Mint Green
     'NANOG': '#60a5fa', // NANOG - Sky Blue
     'KLF4':  '#fbbf24', // KLF4 - Amber
     'MYC':   '#a78bfa', // MYC - Lavender
     'SRC':   '#f472b6', // SRC - Pink
+    'TP53':  '#fb7185', // P53 - Rose
+    'EGFR':  '#38bdf8', // EGFR - Light Blue
+    'KRAS':  '#fb923c', // KRAS - Orange
+    'BRCA1': '#c084fc', // BRCA1 - Purple
+    'BRCA2': '#818cf8', // BRCA2 - Indigo
+    'ESR1':  '#f472b6', // Estrogen Receptor - Pink
 };
 
 const DEFAULT_GENE_COLORS = [
@@ -141,7 +148,7 @@ const applyColorTheme = () => {
     const selected = UI.colorScheme.value;
     const themeKey = COLOR_THEME_MAP[selected]?.(isAlphaFold) ?? 'chain-id';
     
-    if (selected === 'protein-name' && !isAlphaFold) {
+    if (selected === 'protein-name') {
         applyProteinNameColors();
         return;
     }
@@ -156,36 +163,47 @@ const applyColorTheme = () => {
 };
 
 const applyProteinNameColors = () => {
-    if (!viewerPlugin || structureChains.length === 0) return;
+    if (!viewerPlugin) return;
     
     const selectData = [];
     const usedGenes = new Set();
     
-    structureChains.forEach((ch, idx) => {
-        const gene = ch.gene;
-        let colorHex = GENE_COLOR_MAP[gene.toUpperCase()] || 
-                       GENE_COLOR_MAP[gene.split(' ')[0].toUpperCase()];
-        
-        if (!colorHex) {
-            // Assign a stable default color based on gene name hash or index
-            const hash = gene.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-            colorHex = DEFAULT_GENE_COLORS[hash % DEFAULT_GENE_COLORS.length];
-        }
+    if (isAlphaFold && currentAccession) {
+        const gene = UI.geneName.innerText || 'Target';
+        const colorHex = GENE_COLOR_MAP[gene.toUpperCase()] || 
+                        GENE_COLOR_MAP[currentAccession.toUpperCase()] ||
+                        '#ff4d4d'; // Default to coral for interest
         
         selectData.push({
-            auth_asym_id: ch.id,
+            struct_asym_id: 'A',
             color: hexToRgb(colorHex)
         });
         usedGenes.add(`${gene}|${colorHex}`);
-    });
+    } else {
+        structureChains.forEach((ch, idx) => {
+            const gene = ch.gene;
+            let colorHex = GENE_COLOR_MAP[gene.toUpperCase()] || 
+                           GENE_COLOR_MAP[gene.split(' ')[0].toUpperCase()] ||
+                           GENE_COLOR_MAP[currentAccession?.toUpperCase()];
+            
+            if (!colorHex) {
+                const hash = gene.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+                colorHex = DEFAULT_GENE_COLORS[hash % DEFAULT_GENE_COLORS.length];
+            }
+            
+            selectData.push({
+                auth_asym_id: ch.id,
+                color: hexToRgb(colorHex)
+            });
+            usedGenes.add(`${gene}|${colorHex}`);
+        });
+    }
 
     try {
         viewerPlugin.visual.select({
             data: selectData,
             nonSelectedColor: { r: 50, g: 50, b: 60 }
         });
-        
-        // Show legend
         renderProteinLegend(usedGenes);
     } catch (e) {
         console.warn('Protein name coloring failed', e);
@@ -214,6 +232,7 @@ const renderProteinLegend = (usedGenes) => {
 // ───────────────────────────────────────────────
 const loadStructure = async (accession) => {
     currentAccession = accession;
+    hiddenChains.clear();
     const pdbEntries = currentData.uniProtKBCrossReferences?.filter(r => r.database === 'PDB') || [];
 
     if (pdbEntries.length > 0) {
@@ -236,6 +255,16 @@ const loadStructure = async (accession) => {
     if (!isAlphaFold) {
         const pdbId = UI.structureSource.innerText.replace('PDB:', '').trim();
         await fetchFullEntityMetadata(pdbId);
+    }
+    
+    // Auto-apply protein-name scheme if we find a gene of interest
+    const hasInterest = isAlphaFold ? 
+        (GENE_COLOR_MAP[UI.geneName.innerText?.toUpperCase()] || GENE_COLOR_MAP[currentAccession?.toUpperCase()]) :
+        structureChains.some(ch => GENE_COLOR_MAP[ch.gene.toUpperCase()] || GENE_COLOR_MAP[ch.gene.split(' ')[0].toUpperCase()]);
+    
+    if (hasInterest) {
+        UI.colorScheme.value = 'protein-name';
+        applyColorTheme();
     }
 };
 
@@ -293,8 +322,13 @@ window.toggleChainVisibility = (chainId, visible) => {
     else hiddenChains.add(chainId);
 
     try {
+        // Try both auth_asym_id and label_asym_id for maximum compatibility
         viewerPlugin.visual.setVisibility({
-            data: [{ auth_asym_id: chainId }],
+            data: [
+                { auth_asym_id: chainId },
+                { label_asym_id: chainId },
+                { struct_asym_id: chainId }
+            ],
             visible: visible
         });
     } catch (e) {
@@ -390,6 +424,7 @@ const updateTabs = (tab) => {
     UI.tabContent.innerHTML = '';
     if (tab === 'ligands')      renderLigands();
     else if (tab === 'solved')      renderSolvedStructures();
+    else if (tab === 'chains')      renderChains();
     else if (tab === 'cofactors')   renderCofactors();
     else if (tab === 'variants')    renderVariants();
     else if (tab === 'isoforms')    renderIsoforms();
@@ -467,6 +502,60 @@ const renderSolvedStructures = async () => {
     });
 
     UI.tabContent.appendChild(list);
+};
+
+const renderChains = () => {
+    const container = document.createElement('div');
+    container.className = 'chain-visibility-tab';
+    
+    let html = `
+        <div style="font-size:0.95rem; font-weight:600; margin-bottom:1rem; color:var(--accent);">
+            Structure Chains (${isAlphaFold ? '1' : structureChains.length})
+        </div>
+        <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1.5rem;">
+            Toggle checkboxes to hide/show individual protein chains in the 3D viewer.
+        </p>
+        <div class="chain-toggle-list" style="display:flex; flex-direction:column; gap:0.75rem;">
+    `;
+
+    if (isAlphaFold) {
+        const gene = UI.geneName.innerText || 'Target';
+        const isHidden = hiddenChains.has('A');
+        html += `
+            <div class="chain-toggle-item ${isHidden ? 'hidden' : ''}" 
+                 onclick="const cb = this.querySelector('input'); cb.checked = !cb.checked; toggleChainVisibility('A', cb.checked); this.classList.toggle('hidden', !cb.checked);"
+                 style="cursor:pointer; background:rgba(255,255,255,0.05); padding:0.75rem 1rem; border-radius:10px; display:flex; align-items:center; gap:1rem; border:1px solid rgba(255,255,255,0.1);">
+                <input type="checkbox" ${isHidden ? '' : 'checked'} style="pointer-events:none; width:18px; height:18px;">
+                <div style="flex-grow:1;">
+                    <div style="font-weight:700;">Chain A</div>
+                    <div style="font-size:0.75rem; color:var(--text-muted);">${gene} (AlphaFold Prediction)</div>
+                </div>
+            </div>
+        `;
+    } else {
+        structureChains.forEach(ch => {
+            const isHidden = hiddenChains.has(ch.id);
+            html += `
+                <div class="chain-toggle-item ${isHidden ? 'hidden' : ''}" 
+                     onclick="const cb = this.querySelector('input'); cb.checked = !cb.checked; toggleChainVisibility('${ch.id}', cb.checked); this.classList.toggle('hidden', !cb.checked);"
+                     style="cursor:pointer; background:rgba(255,255,255,0.05); padding:0.75rem 1rem; border-radius:10px; display:flex; align-items:center; gap:1rem; border:1px solid rgba(255,255,255,0.1);">
+                    <input type="checkbox" ${isHidden ? '' : 'checked'} style="pointer-events:none; width:18px; height:18px;">
+                    <div style="flex-grow:1;">
+                        <div style="font-weight:700;">Chain ${ch.id}</div>
+                        <div style="font-size:0.75rem; color:var(--text-muted);">${ch.gene}</div>
+                    </div>
+                </div>
+            `;
+        });
+    }
+
+    if (!isAlphaFold && structureChains.length === 0) {
+        html += '<div class="pocket-loading">Detecting chains... Please wait.</div>';
+    }
+
+    html += '</div>';
+    container.innerHTML = html;
+    UI.tabContent.appendChild(container);
 };
 
 const fetchIconsSummary = async (pdbId) => {
@@ -966,37 +1055,6 @@ const renderPockets = async () => {
 
     window._pockets = pockets;
     }  // end else (pockets.length > 0)
-
-    // ─── Chain Visibility section ──────────────────────────────────────────
-    const visibilitySection = document.createElement('div');
-    visibilitySection.className = 'visibility-section';
-    visibilitySection.style.cssText = 'margin-bottom:1rem; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:1rem;';
-    
-    let visibilityHtml = `
-        <div style="font-size:0.92rem;font-weight:600;color:var(--text-primary);margin-bottom:0.6rem;">
-            🧬 Chain Visibility
-        </div>
-        <div class="chain-toggle-list" style="display:flex; flex-wrap:wrap; gap:0.5rem;">
-    `;
-    
-    structureChains.forEach(ch => {
-        const isHidden = hiddenChains.has(ch.id);
-        visibilityHtml += `
-            <div class="chain-toggle-item ${isHidden ? 'hidden' : ''}" 
-                 onclick="const cb = this.querySelector('input'); cb.checked = !cb.checked; toggleChainVisibility('${ch.id}', cb.checked); this.classList.toggle('hidden', !cb.checked);"
-                 style="cursor:pointer; background:rgba(255,255,255,0.05); padding:0.3rem 0.6rem; border-radius:6px; font-size:0.8rem; display:flex; align-items:center; gap:0.4rem; border:1px solid rgba(255,255,255,0.1);">
-                <input type="checkbox" ${isHidden ? '' : 'checked'} style="pointer-events:none; margin:0;">
-                <span>Chain <strong>${ch.id}</strong> <span style="opacity:0.6;font-size:0.75rem;">(${ch.gene})</span></span>
-            </div>
-        `;
-    });
-    
-    if (structureChains.length === 0) visibilityHtml += '<div class="text-sub">No chains detected.</div>';
-    
-    visibilityHtml += '</div>';
-    visibilitySection.innerHTML = visibilityHtml;
-    pocketList.insertBefore(visibilitySection, pocketList.firstChild);
-
 
     // ─── Geometric Cavity Search section (always shown) ──────────────────────
     const divider = document.createElement('div');
