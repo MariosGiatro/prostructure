@@ -1187,17 +1187,26 @@ window.runCavitySearch = async (pdbId) => {
         results.innerHTML = `
             <div class="text-sub" style="margin-bottom:0.6rem;">
                 ${data.cavities.length} geometric pocket${data.cavities.length > 1 ? 's' : ''} detected
-                — click <strong>Show</strong> to highlight lining residues.
+                — click <strong>Show</strong> to highlight lining residues with side chains.
             </div>`;
 
         data.cavities.forEach((cav, idx) => {
             const col = COLORS[idx % COLORS.length];
             const rgb = `rgb(${col.r},${col.g},${col.b})`;
-            const resChips = cav.residues.slice(0, 8).map(r =>
-                `<span class="res-chip">${r.chain}:${r.resname}${r.resseq}</span>`
+
+            // Druggability score: based on volume, depth, and residue count
+            const volScore = Math.min(cav.volume / 500, 1.0); // 500 Å³ = ideal
+            const depthScore = Math.min(cav.depth / 8, 1.0);  // 8 Å deep = ideal
+            const resScore = Math.min(cav.residues.length / 20, 1.0); // 20+ residues
+            const drugScore = Math.round((volScore * 0.4 + depthScore * 0.35 + resScore * 0.25) * 100);
+            const drugLabel = drugScore >= 70 ? 'Druggable' : drugScore >= 40 ? 'Moderate' : 'Low';
+            const drugClass = drugScore >= 70 ? 'path-pathogenic' : drugScore >= 40 ? 'path-uncertain' : 'path-benign';
+
+            const resChips = cav.residues.slice(0, 10).map(r =>
+                `<span class="res-chip" title="Distance to pocket: ${r.dist ?? '?'} Å">${r.chain}:${r.resname}${r.resseq}</span>`
             ).join('');
-            const more = cav.residues.length > 8
-                ? `<span class="res-chip muted">+${cav.residues.length - 8}</span>` : '';
+            const more = cav.residues.length > 10
+                ? `<span class="res-chip muted" onclick="this.parentElement.classList.toggle('expanded')" style="cursor:pointer;">+${cav.residues.length - 10} more</span>` : '';
 
             const card = document.createElement('div');
             card.className = 'pocket-card';
@@ -1209,6 +1218,7 @@ window.runCavitySearch = async (pdbId) => {
                             <span style="background:${rgb};width:10px;height:10px;border-radius:50%;display:inline-block;flex-shrink:0;"></span>
                             Cavity ${idx + 1}
                             <span class="pocket-badge fpocket">Geometric</span>
+                            <span class="pocket-badge ${drugClass}" title="Druggability: ${drugScore}%">${drugLabel} (${drugScore}%)</span>
                         </div>
                         <div class="pocket-stats">
                             <span class="pocket-stat">Volume <strong>${Math.round(cav.volume)} Å³</strong></span>
@@ -1234,7 +1244,7 @@ window.runCavitySearch = async (pdbId) => {
     }
 };
 
-/** Highlight all lining residues of a geometric cavity in the Molstar viewer */
+/** Highlight all lining residues of a geometric cavity in the Molstar viewer (CavityPlus-style) */
 window.highlightCavity = (idx) => {
     const cavities = window._cavities || [];
     const cav = cavities[idx];
@@ -1249,7 +1259,10 @@ window.highlightCavity = (idx) => {
 
     if (window._activeCavIdx === idx) {
         window._activeCavIdx = null;
-        try { viewerPlugin.visual.reset({ camera: false }); } catch (_) {}
+        try {
+            viewerPlugin.visual.clearSelection();
+            viewerPlugin.visual.reset({ camera: true, theme: true });
+        } catch (_) {}
         return;
     }
 
@@ -1263,19 +1276,27 @@ window.highlightCavity = (idx) => {
     ];
     const col = COLORS[idx % COLORS.length];
 
-    // Select all lining residues with colour, dim others
+    // CavityPlus-style: show lining residues with side chains + ball-and-stick
     const selData = cav.residues.map((r, i) => ({
         residue_number: r.resseq,
         auth_asym_id:   r.chain,
         color:          col,
-        focus:          i === 0,
+        sideChain:      true,                    // Show side chains
+        representation: 'ball-and-stick',         // Ball-and-stick for pocket lining
+        representationColor: col,
+        focus:          i === 0,                  // Focus on first residue
     }));
 
     try {
         viewerPlugin.visual.select({
             data: selData,
-            nonSelectedColor: { r: 25, g: 25, b: 45 },
+            nonSelectedColor: { r: 40, g: 40, b: 55 },
         });
+        // Also focus on all lining residues as a group
+        viewerPlugin.visual.focus(selData.map(s => ({
+            residue_number: s.residue_number,
+            auth_asym_id: s.auth_asym_id,
+        })));
     } catch (e) {
         console.warn('Cavity highlight failed:', e);
     }

@@ -162,25 +162,45 @@ def find_cavities(atoms, gs=1.0, small_probe=1.4, large_probe=4.5, min_vol=50.0,
         center = voxels.mean(axis=0) * gs + mins
         max_d  = float(depth[mask].max())
 
+        # Convert pocket voxels to real-space coordinates
+        pocket_coords = voxels * gs + mins  # Nx3 array
+
+        # Find lining residues: any ATOM residue within 4.5 Å of a pocket voxel
+        # This is much more accurate than distance-from-center
+        LINING_CUTOFF = 4.5
         lining = {}
-        for a in atoms:
-            if a['hetatm'] or a['resname'] in SKIP:
-                continue
-            d2 = ((a['x'] - float(center[0]))**2 +
-                  (a['y'] - float(center[1]))**2 +
-                  (a['z'] - float(center[2]))**2)
-            if d2 <= 36.0:
-                key = (a['chain'], a['resseq'])
-                if key not in lining:
-                    lining[key] = a['resname']
+        
+        # Filter to only standard residues (not HETATM)
+        std_atoms = [a for a in atoms if not a['hetatm'] and a['resname'] not in SKIP]
+        if chain_id:
+            std_atoms = [a for a in std_atoms if a['chain'].upper() == chain_id.upper()]
+        
+        if len(pocket_coords) > 0 and len(std_atoms) > 0:
+            atom_coords = np.array([[a['x'], a['y'], a['z']] for a in std_atoms], dtype=np.float32)
+            
+            # For efficiency, first filter by bounding box
+            pocket_min = pocket_coords.min(axis=0) - LINING_CUTOFF
+            pocket_max = pocket_coords.max(axis=0) + LINING_CUTOFF
+            bbox_mask = np.all((atom_coords >= pocket_min) & (atom_coords <= pocket_max), axis=1)
+            
+            for ai in np.where(bbox_mask)[0]:
+                a = std_atoms[ai]
+                ac = atom_coords[ai]
+                # Min distance from this atom to any pocket voxel
+                dists = np.sqrt(np.sum((pocket_coords - ac)**2, axis=1))
+                min_dist = float(dists.min())
+                if min_dist <= LINING_CUTOFF:
+                    key = (a['chain'], a['resseq'])
+                    if key not in lining or min_dist < lining[key][1]:
+                        lining[key] = (a['resname'], min_dist)
 
         pockets.append({
             'volume':   round(vol, 1),
             'depth':    round(max_d, 2),
             'center':   [round(float(center[i]), 2) for i in range(3)],
             'residues': [
-                {'chain': ch, 'resseq': rs, 'resname': rn}
-                for (ch, rs), rn in sorted(lining.items())
+                {'chain': ch, 'resseq': rs, 'resname': rn, 'dist': round(d, 1)}
+                for (ch, rs), (rn, d) in sorted(lining.items())
             ],
         })
 
