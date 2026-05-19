@@ -1471,7 +1471,7 @@ window.runCavitySearch = async (pdbId) => {
     }
 };
 
-/** Highlight all lining residues of a geometric cavity in the Molstar viewer (CavityPlus-style) */
+/** Highlight all lining residues of a geometric cavity in the Molstar viewer */
 window.highlightCavity = (idx) => {
     const cavities = window._cavities || [];
     const cav = cavities[idx];
@@ -1503,23 +1503,43 @@ window.highlightCavity = (idx) => {
     ];
     const col = COLORS[idx % COLORS.length];
 
-    // CavityPlus-style: show lining residues with side chains + ball-and-stick
+    // Build selection data for lining residues:
+    // - ball-and-stick for atomic detail of side chains
+    // - gaussian-surface to fill the cavity volume with a translucent blob
     const selData = cav.residues.map((r, i) => ({
         residue_number: r.resseq,
         auth_asym_id:   r.chain,
         color:          col,
-        sideChain:      true,                    // Show side chains
-        representation: 'ball-and-stick',         // Ball-and-stick for pocket lining
+        sideChain:      true,
+        representation: 'ball-and-stick',
         representationColor: col,
-        focus:          i === 0,                  // Focus on first residue
+        focus:          i === 0,
+    }));
+
+    // Add a second set of the same residues with gaussian-surface to fill the pocket
+    const surfaceData = cav.residues.map(r => ({
+        residue_number: r.resseq,
+        auth_asym_id:   r.chain,
+        color:          { r: col.r, g: col.g, b: col.b },
+        sideChain:      true,
+        representation: 'gaussian-surface',
+        representationColor: { r: Math.min(col.r + 30, 255), g: Math.min(col.g + 30, 255), b: Math.min(col.b + 30, 255) },
     }));
 
     try {
+        // First apply ball-and-stick selection
         viewerPlugin.visual.select({
             data: selData,
             nonSelectedColor: { r: 40, g: 40, b: 55 },
         });
-        // Also focus on all lining residues as a group
+        // Then add the surface representation on top (keepColors + keepRepresentations)
+        viewerPlugin.visual.select({
+            data: surfaceData,
+            nonSelectedColor: { r: 40, g: 40, b: 55 },
+            keepColors: true,
+            keepRepresentations: true,
+        });
+        // Focus on all lining residues as a group
         viewerPlugin.visual.focus(selData.map(s => ({
             residue_number: s.residue_number,
             auth_asym_id: s.auth_asym_id,
@@ -1569,15 +1589,32 @@ window.highlightPocket = (idx) => {
     const col = COLORS[idx % COLORS.length];
 
     try {
-        // Select and focus the ligand residue by chain + residue number
+        // Select and focus the ligand residue with ball-and-stick
         viewerPlugin.visual.select({
             data: [{
                 residue_number: pocket.resNum,
                 auth_asym_id:   pocket.chain,
                 color:          col,
                 focus:          true,
+                sideChain:      true,
+                representation: 'ball-and-stick',
+                representationColor: col,
             }],
             nonSelectedColor: { r: 30, g: 30, b: 50 },
+        });
+        // Add gaussian-surface to fill the binding site
+        viewerPlugin.visual.select({
+            data: [{
+                residue_number: pocket.resNum,
+                auth_asym_id:   pocket.chain,
+                color:          { r: col.r, g: col.g, b: col.b },
+                sideChain:      true,
+                representation: 'gaussian-surface',
+                representationColor: { r: Math.min(col.r + 30, 255), g: Math.min(col.g + 30, 255), b: Math.min(col.b + 30, 255) },
+            }],
+            nonSelectedColor: { r: 30, g: 30, b: 50 },
+            keepColors: true,
+            keepRepresentations: true,
         });
     } catch (e) {
         console.warn('Pocket highlight failed:', e);
