@@ -53,8 +53,44 @@ const GENE_COLOR_MAP = {
     'ESR1':  '#f472b6', // Estrogen Receptor - Pink
 };
 
-const DEFAULT_GENE_COLORS = [
-    '#f472b6', '#fb923c', '#2dd4bf', '#818cf8', '#e879f9', '#94a3b8'
+// The target protein of interest always gets this unmistakable color
+const TARGET_PROTEIN_COLOR = '#ff4d4d'; // Vibrant Coral – reserved for the query protein
+
+// Large palette of maximally-separated colors for other protein chains
+// Ordered so consecutive picks are visually distinct from each other
+const PROTEIN_CHAIN_COLORS = [
+    '#4ade80', // Mint Green
+    '#a78bfa', // Lavender
+    '#fb923c', // Orange
+    '#f472b6', // Pink
+    '#fbbf24', // Amber
+    '#38bdf8', // Sky Blue
+    '#e879f9', // Fuchsia
+    '#34d399', // Emerald
+    '#c084fc', // Purple
+    '#f97316', // Deep Orange
+    '#22d3ee', // Cyan
+    '#facc15', // Yellow
+    '#818cf8', // Indigo
+    '#fb7185', // Rose
+    '#a3e635', // Lime
+    '#2dd4bf', // Teal
+    '#d946ef', // Magenta
+    '#fdba74', // Peach
+    '#67e8f9', // Light Cyan
+    '#bef264', // Yellow-Green
+];
+
+// DNA / RNA chains get their own cool-toned palette so they never clash with proteins
+const NUCLEIC_ACID_COLORS = [
+    '#94a3b8', // Slate (muted – nucleic acids are usually "support")
+    '#64748b', // Dark Slate
+    '#78716c', // Warm Gray
+    '#a1a1aa', // Zinc
+    '#6b7280', // Cool Gray
+    '#57534e', // Stone
+    '#9ca3af', // Gray-400
+    '#71717a', // Zinc-500
 ];
 
 // ───────────────────────────────────────────────
@@ -184,36 +220,108 @@ const applyProteinNameColors = () => {
     if (!viewerPlugin) return;
     
     const selectData = [];
-    const usedGenes = new Set();
+    const legendEntries = [];        // {name, color, type} for the legend
+    const usedColors = new Set();    // track assigned hex values to avoid dupes
+    
+    // Identify the target gene/accession (what the user searched for)
+    const targetGene = (UI.geneName.innerText || '').toUpperCase();
+    const targetAcc  = (currentAccession || '').toUpperCase();
     
     if (isAlphaFold && currentAccession) {
+        // AlphaFold: single chain, always the target
         const gene = UI.geneName.innerText || 'Target';
-        const colorHex = GENE_COLOR_MAP[gene.toUpperCase()] || 
-                        GENE_COLOR_MAP[currentAccession.toUpperCase()] ||
-                        '#ff4d4d'; // Default to coral for interest
-        
         selectData.push({
             struct_asym_id: 'A',
-            color: hexToRgb(colorHex)
+            color: hexToRgb(TARGET_PROTEIN_COLOR)
         });
-        usedGenes.add(`${gene}|${colorHex}`);
+        usedColors.add(TARGET_PROTEIN_COLOR);
+        legendEntries.push({ name: gene, color: TARGET_PROTEIN_COLOR, type: 'target' });
     } else {
-        structureChains.forEach((ch, idx) => {
-            const gene = ch.gene;
-            let colorHex = GENE_COLOR_MAP[gene.toUpperCase()] || 
-                           GENE_COLOR_MAP[gene.split(' ')[0].toUpperCase()] ||
-                           GENE_COLOR_MAP[currentAccession?.toUpperCase()];
+        // PDB multi-chain: classify each chain and assign colors
+        let proteinColorIdx = 0;  // index into PROTEIN_CHAIN_COLORS
+        let nucleicColorIdx = 0;  // index into NUCLEIC_ACID_COLORS
+        
+        // Group chains by unique gene name to give same-gene chains the same color
+        const geneColorAssignments = {};  // gene -> hex
+        
+        // First pass: identify target chains and assign them the reserved color
+        structureChains.forEach(ch => {
+            const geneUp = (ch.gene || '').toUpperCase();
+            const geneFirst = geneUp.split(' ')[0];
+            const isTarget = geneUp === targetGene || geneFirst === targetGene ||
+                             (ch.accession && ch.accession.toUpperCase() === targetAcc) ||
+                             GENE_COLOR_MAP[geneUp] === TARGET_PROTEIN_COLOR ||
+                             GENE_COLOR_MAP[geneFirst] === TARGET_PROTEIN_COLOR;
             
-            if (!colorHex) {
-                const hash = gene.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-                colorHex = DEFAULT_GENE_COLORS[hash % DEFAULT_GENE_COLORS.length];
+            if (isTarget && !geneColorAssignments[geneUp]) {
+                geneColorAssignments[geneUp] = TARGET_PROTEIN_COLOR;
+                usedColors.add(TARGET_PROTEIN_COLOR);
             }
+        });
+        
+        // Helper: pick next available color from a palette, avoiding used colors
+        const pickColor = (palette, idxRef) => {
+            let color;
+            let attempts = 0;
+            do {
+                color = palette[idxRef.val % palette.length];
+                idxRef.val++;
+                attempts++;
+            } while (usedColors.has(color) && attempts < palette.length);
+            usedColors.add(color);
+            return color;
+        };
+        
+        const protIdx = { val: proteinColorIdx };
+        const nucIdx  = { val: nucleicColorIdx };
+        
+        // Second pass: assign colors to all chains
+        structureChains.forEach(ch => {
+            const geneUp = (ch.gene || '').toUpperCase();
+            const isNucleic = ch.entityType && (
+                ch.entityType.includes('ribonucleotide') ||
+                ch.entityType.includes('deoxyribonucleotide') ||
+                ch.entityType.toLowerCase().includes('dna') ||
+                ch.entityType.toLowerCase().includes('rna')
+            );
+            
+            let colorHex;
+            
+            // Already assigned (e.g. target or same gene as a previous chain)
+            if (geneColorAssignments[geneUp]) {
+                colorHex = geneColorAssignments[geneUp];
+            }
+            // Known gene from the curated map (but NOT the target color if it's not the target)
+            else if (GENE_COLOR_MAP[geneUp] && GENE_COLOR_MAP[geneUp] !== TARGET_PROTEIN_COLOR) {
+                colorHex = GENE_COLOR_MAP[geneUp];
+                usedColors.add(colorHex);
+            }
+            else if (GENE_COLOR_MAP[geneUp.split(' ')[0]] && GENE_COLOR_MAP[geneUp.split(' ')[0]] !== TARGET_PROTEIN_COLOR) {
+                colorHex = GENE_COLOR_MAP[geneUp.split(' ')[0]];
+                usedColors.add(colorHex);
+            }
+            // Nucleic acid → cool-toned palette
+            else if (isNucleic) {
+                colorHex = pickColor(NUCLEIC_ACID_COLORS, nucIdx);
+            }
+            // Other protein → warm/vibrant palette
+            else {
+                colorHex = pickColor(PROTEIN_CHAIN_COLORS, protIdx);
+            }
+            
+            geneColorAssignments[geneUp] = colorHex;
             
             selectData.push({
                 auth_asym_id: ch.id,
                 color: hexToRgb(colorHex)
             });
-            usedGenes.add(`${gene}|${colorHex}`);
+            
+            // Build legend (one entry per unique gene)
+            if (!legendEntries.find(e => e.name === ch.gene && e.color === colorHex)) {
+                const typeLabel = isNucleic ? 'nucleic' : 
+                    (geneColorAssignments[geneUp] === TARGET_PROTEIN_COLOR ? 'target' : 'protein');
+                legendEntries.push({ name: ch.gene, color: colorHex, type: typeLabel });
+            }
         });
     }
 
@@ -222,13 +330,13 @@ const applyProteinNameColors = () => {
             data: selectData,
             nonSelectedColor: { r: 50, g: 50, b: 60 }
         });
-        renderProteinLegend(usedGenes);
+        renderProteinLegend(legendEntries);
     } catch (e) {
         console.warn('Protein name coloring failed', e);
     }
 };
 
-const renderProteinLegend = (usedGenes) => {
+const renderProteinLegend = (entries) => {
     let legend = document.getElementById('protein-legend');
     if (!legend) {
         legend = document.createElement('div');
@@ -239,9 +347,16 @@ const renderProteinLegend = (usedGenes) => {
     
     UI.plddtLegend.classList.add('hidden');
     legend.classList.remove('hidden');
-    legend.innerHTML = Array.from(usedGenes).map(ug => {
-        const [name, color] = ug.split('|');
-        return `<div class="legend-item"><span class="color" style="background:${color}"></span> ${name}</div>`;
+    
+    // Sort: target first, then other proteins, then nucleic acids
+    const order = { target: 0, protein: 1, nucleic: 2 };
+    const sorted = [...entries].sort((a, b) => (order[a.type] ?? 1) - (order[b.type] ?? 1));
+    
+    legend.innerHTML = sorted.map(e => {
+        const label = e.type === 'target' ? `<strong>${e.name}</strong> ★` :
+                      e.type === 'nucleic' ? `${e.name} <span style="opacity:0.6;font-size:0.7rem">(nucleic acid)</span>` :
+                      e.name;
+        return `<div class="legend-item"><span class="color" style="background:${e.color}"></span> ${label}</div>`;
     }).join('');
 };
 
@@ -305,10 +420,12 @@ const fetchFullEntityMetadata = async (pdbId) => {
                          d.rcsb_polymer_entity?.pdbx_description || `Entity ${eid}`;
             const accession = d.rcsb_polymer_entity_align?.[0]?.reference_database_accession;
             const chains = d.entity_poly.pdbx_strand_id.split(',');
+            // entity_poly.type tells us protein vs DNA vs RNA
+            const entityType = d.entity_poly?.type || 'polypeptide(L)';
 
-            entityMetadata[eid] = { gene, accession, chains };
+            entityMetadata[eid] = { gene, accession, chains, entityType };
             chains.forEach(ch => {
-                structureChains.push({ id: ch.trim(), gene, entityId: eid });
+                structureChains.push({ id: ch.trim(), gene, entityId: eid, entityType, accession });
             });
         }));
 
