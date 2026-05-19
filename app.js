@@ -216,6 +216,71 @@ const applyColorTheme = () => {
     }
 };
 
+/**
+ * Deterministic hash (FNV-1a) so the same gene name always maps to the same
+ * palette index, regardless of how many chains exist or their order.
+ */
+const fnv1aHash = (str) => {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        h = Math.imul(h, 0x01000193);
+    }
+    return h >>> 0; // unsigned 32-bit
+};
+
+/**
+ * Pick a deterministic color from a palette for a given key string.
+ * If the chosen slot is already taken, walk forward until a free one is found.
+ */
+const deterministicColor = (key, palette, usedColors) => {
+    const base = fnv1aHash(key) % palette.length;
+    for (let i = 0; i < palette.length; i++) {
+        const color = palette[(base + i) % palette.length];
+        if (!usedColors.has(color)) {
+            usedColors.add(color);
+            return color;
+        }
+    }
+    // All slots used — just return the hashed one (unavoidable repeat)
+    return palette[base];
+};
+
+/**
+ * Check whether a chain belongs to the protein of interest.
+ * Uses multiple heuristics: UniProt accession match (most reliable),
+ * gene name matching with normalization, and curated map lookup.
+ */
+const isChainTarget = (ch, targetGene, targetAcc) => {
+    // 1. Accession match — most reliable across PDB entries
+    if (ch.accession && targetAcc && ch.accession.toUpperCase() === targetAcc) {
+        return true;
+    }
+
+    const geneUp    = (ch.gene || '').toUpperCase();
+    const geneFirst = geneUp.split(' ')[0];
+
+    // 2. Exact gene name match
+    if (targetGene && (geneUp === targetGene || geneFirst === targetGene)) {
+        return true;
+    }
+
+    // 3. Curated map explicitly maps this gene to the target color
+    if (GENE_COLOR_MAP[geneUp] === TARGET_PROTEIN_COLOR ||
+        GENE_COLOR_MAP[geneFirst] === TARGET_PROTEIN_COLOR) {
+        return true;
+    }
+
+    // 4. Fuzzy: strip trailing digits/underscores and compare
+    //    e.g. "POU5F1" vs "PO5F1", "OCT4" vs "OCT4_HUMAN"
+    const normalize = s => s.replace(/[_\-\s]/g, '').replace(/\d+$/, '');
+    if (targetGene && normalize(geneFirst) === normalize(targetGene)) {
+        return true;
+    }
+
+    return false;
+};
+
 const applyProteinNameColors = () => {
     if (!viewerPlugin) return;
     
@@ -237,45 +302,21 @@ const applyProteinNameColors = () => {
         usedColors.add(TARGET_PROTEIN_COLOR);
         legendEntries.push({ name: gene, color: TARGET_PROTEIN_COLOR, type: 'target' });
     } else {
-        // PDB multi-chain: classify each chain and assign colors
-        let proteinColorIdx = 0;  // index into PROTEIN_CHAIN_COLORS
-        let nucleicColorIdx = 0;  // index into NUCLEIC_ACID_COLORS
-        
         // Group chains by unique gene name to give same-gene chains the same color
         const geneColorAssignments = {};  // gene -> hex
+        
+        // Reserve the target color so no other chain can claim it
+        usedColors.add(TARGET_PROTEIN_COLOR);
         
         // First pass: identify target chains and assign them the reserved color
         structureChains.forEach(ch => {
             const geneUp = (ch.gene || '').toUpperCase();
-            const geneFirst = geneUp.split(' ')[0];
-            const isTarget = geneUp === targetGene || geneFirst === targetGene ||
-                             (ch.accession && ch.accession.toUpperCase() === targetAcc) ||
-                             GENE_COLOR_MAP[geneUp] === TARGET_PROTEIN_COLOR ||
-                             GENE_COLOR_MAP[geneFirst] === TARGET_PROTEIN_COLOR;
-            
-            if (isTarget && !geneColorAssignments[geneUp]) {
+            if (!geneColorAssignments[geneUp] && isChainTarget(ch, targetGene, targetAcc)) {
                 geneColorAssignments[geneUp] = TARGET_PROTEIN_COLOR;
-                usedColors.add(TARGET_PROTEIN_COLOR);
             }
         });
         
-        // Helper: pick next available color from a palette, avoiding used colors
-        const pickColor = (palette, idxRef) => {
-            let color;
-            let attempts = 0;
-            do {
-                color = palette[idxRef.val % palette.length];
-                idxRef.val++;
-                attempts++;
-            } while (usedColors.has(color) && attempts < palette.length);
-            usedColors.add(color);
-            return color;
-        };
-        
-        const protIdx = { val: proteinColorIdx };
-        const nucIdx  = { val: nucleicColorIdx };
-        
-        // Second pass: assign colors to all chains
+        // Second pass: assign deterministic colors to all remaining chains
         structureChains.forEach(ch => {
             const geneUp = (ch.gene || '').toUpperCase();
             const isNucleic = ch.entityType && (
@@ -287,11 +328,11 @@ const applyProteinNameColors = () => {
             
             let colorHex;
             
-            // Already assigned (e.g. target or same gene as a previous chain)
+            // Already assigned (target chain, or same gene as a previously-seen chain)
             if (geneColorAssignments[geneUp]) {
                 colorHex = geneColorAssignments[geneUp];
             }
-            // Known gene from the curated map (but NOT the target color if it's not the target)
+            // Known gene from the curated map (but never steal the target color)
             else if (GENE_COLOR_MAP[geneUp] && GENE_COLOR_MAP[geneUp] !== TARGET_PROTEIN_COLOR) {
                 colorHex = GENE_COLOR_MAP[geneUp];
                 usedColors.add(colorHex);
@@ -300,13 +341,13 @@ const applyProteinNameColors = () => {
                 colorHex = GENE_COLOR_MAP[geneUp.split(' ')[0]];
                 usedColors.add(colorHex);
             }
-            // Nucleic acid → cool-toned palette
+            // Nucleic acid → deterministic pick from cool-toned palette
             else if (isNucleic) {
-                colorHex = pickColor(NUCLEIC_ACID_COLORS, nucIdx);
+                colorHex = deterministicColor(geneUp, NUCLEIC_ACID_COLORS, usedColors);
             }
-            // Other protein → warm/vibrant palette
+            // Other protein → deterministic pick from vibrant palette
             else {
-                colorHex = pickColor(PROTEIN_CHAIN_COLORS, protIdx);
+                colorHex = deterministicColor(geneUp, PROTEIN_CHAIN_COLORS, usedColors);
             }
             
             geneColorAssignments[geneUp] = colorHex;
@@ -319,7 +360,7 @@ const applyProteinNameColors = () => {
             // Build legend (one entry per unique gene)
             if (!legendEntries.find(e => e.name === ch.gene && e.color === colorHex)) {
                 const typeLabel = isNucleic ? 'nucleic' : 
-                    (geneColorAssignments[geneUp] === TARGET_PROTEIN_COLOR ? 'target' : 'protein');
+                    (colorHex === TARGET_PROTEIN_COLOR ? 'target' : 'protein');
                 legendEntries.push({ name: ch.gene, color: colorHex, type: typeLabel });
             }
         });
