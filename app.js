@@ -491,28 +491,97 @@ const hexToRgb = (hex) => {
     } : { r: 200, g: 200, b: 200 };
 };
 
-/** Toggle visibility of a chain using select API (dims hidden chains) */
+/** Get the protein-name color for a specific chain (reuses the deterministic logic) */
+const getChainColor = (ch) => {
+    const targetGene = (UI.geneName.innerText || '').toUpperCase();
+    const targetAcc  = (currentAccession || '').toUpperCase();
+    const geneUp = (ch.gene || '').toUpperCase();
+
+    // Target protein → always coral
+    if (isChainTarget(ch, targetGene, targetAcc)) {
+        return TARGET_PROTEIN_COLOR;
+    }
+
+    // Curated map
+    if (GENE_COLOR_MAP[geneUp] && GENE_COLOR_MAP[geneUp] !== TARGET_PROTEIN_COLOR) {
+        return GENE_COLOR_MAP[geneUp];
+    }
+    const geneFirst = geneUp.split(' ')[0];
+    if (GENE_COLOR_MAP[geneFirst] && GENE_COLOR_MAP[geneFirst] !== TARGET_PROTEIN_COLOR) {
+        return GENE_COLOR_MAP[geneFirst];
+    }
+
+    // Nucleic acid vs protein
+    const isNucleic = ch.entityType && (
+        ch.entityType.includes('ribonucleotide') ||
+        ch.entityType.includes('deoxyribonucleotide') ||
+        ch.entityType.toLowerCase().includes('dna') ||
+        ch.entityType.toLowerCase().includes('rna')
+    );
+
+    // Deterministic color — we need to account for used colors across all chains
+    // Build the full used-color set to mirror applyProteinNameColors behavior
+    const usedColors = new Set([TARGET_PROTEIN_COLOR]);
+    const geneAssigned = {};
+    
+    // First pass: assign target chains
+    for (const c of structureChains) {
+        const g = (c.gene || '').toUpperCase();
+        if (!geneAssigned[g] && isChainTarget(c, targetGene, targetAcc)) {
+            geneAssigned[g] = TARGET_PROTEIN_COLOR;
+        }
+    }
+    
+    // Second pass: assign all chains in order (same logic as applyProteinNameColors)
+    for (const c of structureChains) {
+        const g = (c.gene || '').toUpperCase();
+        if (geneAssigned[g]) continue;
+        
+        const isNuc = c.entityType && (
+            c.entityType.includes('ribonucleotide') ||
+            c.entityType.includes('deoxyribonucleotide') ||
+            c.entityType.toLowerCase().includes('dna') ||
+            c.entityType.toLowerCase().includes('rna')
+        );
+        
+        if (GENE_COLOR_MAP[g] && GENE_COLOR_MAP[g] !== TARGET_PROTEIN_COLOR) {
+            geneAssigned[g] = GENE_COLOR_MAP[g];
+            usedColors.add(GENE_COLOR_MAP[g]);
+        } else if (GENE_COLOR_MAP[g.split(' ')[0]] && GENE_COLOR_MAP[g.split(' ')[0]] !== TARGET_PROTEIN_COLOR) {
+            geneAssigned[g] = GENE_COLOR_MAP[g.split(' ')[0]];
+            usedColors.add(geneAssigned[g]);
+        } else {
+            const palette = isNuc ? NUCLEIC_ACID_COLORS : PROTEIN_CHAIN_COLORS;
+            geneAssigned[g] = deterministicColor(g, palette, usedColors);
+        }
+    }
+    
+    return geneAssigned[geneUp] || '#94a3b8';
+};
+
+/** Toggle visibility of a chain */
 window.toggleChainVisibility = (chainId, visible) => {
     if (!viewerPlugin || !viewerPlugin.visual) return;
     if (visible) hiddenChains.delete(chainId);
     else hiddenChains.add(chainId);
 
-    // Re-apply coloring: show visible chains normally, hide others
     try {
         const visibleChains = structureChains.filter(ch => !hiddenChains.has(ch.id));
         if (visibleChains.length === structureChains.length) {
-            // All visible → clear selection to show defaults
+            // All visible → re-apply the current color scheme properly
             viewerPlugin.visual.clearSelection();
+            applyColorTheme();
             return;
         }
-        // Color visible chains; dim hidden ones
+        // Color visible chains with their proper protein-name colors,
+        // hidden chains become the background color (effectively invisible)
         const data = visibleChains.map(ch => ({
             auth_asym_id: ch.id,
-            color: { r: 180, g: 180, b: 200 }, // neutral visible
+            color: hexToRgb(getChainColor(ch)),
         }));
         viewerPlugin.visual.select({
             data: data,
-            nonSelectedColor: { r: 15, g: 23, b: 42 }, // match background = effectively hidden
+            nonSelectedColor: { r: 15, g: 23, b: 42 }, // exact bg color
         });
     } catch (e) {
         console.warn('toggleChainVisibility failed', e);
